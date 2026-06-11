@@ -1,0 +1,60 @@
+{
+  "name": "@hamster-note/epub-parser",
+  "version": "0.1.0",
+  "description": "TypeScript ESM package for bidirectional conversion between EPUB files and IntermediateDocument",
+  "scripts": {
+    "build:all": "rolldown --config rolldown.config.ts",
+    "prepublishOnly": "yarn build:all",
+    "dev": "yarn build:all && node demo/server.mjs",
+    "lint": "echo 'no-lint'",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hamster-note/document-parser": "0.3.1",
+    "@hamster-note/types": "0.8.0",
+    "epub": "2.1.1",
+    "epub-gen-memory": "1.1.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@system-ui-js/development-base": "^0.1.2",
+    "@types/jest": "30.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.50.0",
+    "@typescript-eslint/parser": "^8.50.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-sonarjs": "^3.0.5",
+    "globals": "^15.14.0",
+    "happy-dom": "^20.5.0",
+    "jest": "30.2.0",
+    "prettier": "^3.7.4",
+    "prettier-config-standard": "^7.0.0",
+    "rolldown": "^1.0.0-beta.58",
+    "rolldown-plugin-dts": "^0.20.0",
+    "ts-jest": "29.4.6",
+    "typescript": "^5.0.2",
+    "typescript-eslint": "^8.50.0"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}
