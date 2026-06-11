@@ -1,0 +1,7 @@
+Dependency import evidence for Task 2.
+
+The epub package distribution includes Node builtin imports at the package entrypoint used by this parser:
+
+- dist/epub.js imports node:fs/promises at top level.
+
+Because this import is evaluated before parser code can select a runtime-specific branch, the parser intentionally remains Node-only for encode and decode through the current dependency entrypoints.

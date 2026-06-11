@@ -1,0 +1,25 @@
+PR #1 fix verification evidence.
+
+Review finding fixed:
+
+- The Jest runtime test expected Task 2 evidence files under .omo/evidence, but the PR did not include them and .gitignore ignored the whole .omo directory.
+
+Changes made:
+
+- .gitignore now keeps .omo/evidence/*.txt trackable while continuing to ignore other .omo generated content.
+- Added task-2-browser-compatibility.txt with the documented browser bundling limitations.
+- Added task-2-dependency-node-import.txt with the dependency Node import evidence.
+
+Verification commands run successfully:
+
+- yarn typecheck
+- yarn test --runInBand
+- yarn build:all
+- node --input-type=module -e "import { EpubParser } from './dist/index.js'; ..."
+
+Manual QA result:
+
+- Imported the built package from dist/index.js.
+- Parsed src/__tests__/fixtures/minimal.epub.
+- Decoded the parsed IntermediateDocument back to EPUB bytes.
+- Observed title "Minimal Test Book", page count 1, and ZIP magic bytes [80, 75, 3, 4].

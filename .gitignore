@@ -43,4 +43,6 @@ coverage/
 # 工具生成的配置和缓存
 .opencode/
 .specify/
-.omo/
+.omo/*
+!.omo/evidence/
+!.omo/evidence/*.txt
