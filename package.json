@@ -1,6 +1,6 @@
 {
   "name": "@hamster-note/epub-parser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript ESM package for bidirectional conversion between EPUB files and IntermediateDocument",
   "scripts": {
     "build:all": "rolldown --config rolldown.config.ts",
