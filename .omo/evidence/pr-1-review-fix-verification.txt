@@ -1,0 +1,20 @@
+PR #1 review and fix verification
+
+Fixed issues:
+- EpubDocument.getCover no longer requires DOM globals in Node runtime.
+- PR CI concurrency now uses the stable PR number instead of the commit SHA.
+- sync-master-to-dev now runs only after pushes to main/master, not on PR activity.
+- publish workflow validates version branch name against package.json version.
+- publish workflow avoids running the build twice by publishing with --ignore-scripts after the explicit build.
+
+Verification run:
+- lsp_diagnostics src/EpubDocument.ts: no diagnostics found.
+- lsp_diagnostics src/__tests__/epubWrappers.test.ts: no diagnostics found.
+- yarn lint: passed.
+- yarn typecheck: passed.
+- yarn test --runInBand: 7 suites passed, 45 tests passed.
+- yarn build:all: passed.
+- Manual QA: imported ./dist/index.js and called new EpubDocument(doc).getCover() in Node; returned the expected cover id and undefined when no cover exists.
+
+Notes:
+- YAML LSP diagnostics could not run because yaml-language-server is not installed in this environment.

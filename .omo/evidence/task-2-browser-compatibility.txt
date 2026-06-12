@@ -1,0 +1,14 @@
+Browser compatibility evidence for Task 2.
+
+Attempting to bundle the current parser entrypoint for a browser runtime fails because the selected EPUB dependencies resolve Node-only modules at package import time:
+
+- epub resolves dist/epub.js, which imports node:fs/promises.
+- epub-gen-memory resolves Node-oriented code paths that require fs and path.
+
+Representative bundler diagnostics:
+
+- Could not resolve "node:fs/promises"
+- Could not resolve "fs"
+- Could not resolve "path"
+
+No polyfills or shims were added. The package documents Node-only runtime support instead.

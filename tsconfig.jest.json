@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": false,
+    "types": ["jest", "node"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "src/*": ["./node_modules/@hamster-note/types/src/*"]
+    }
+  }
+}

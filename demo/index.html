@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@hamster-note/epub-parser Demo</title>
+    <link rel="stylesheet" href="/demo.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">EPUB Parser Demo · dev port 8871</p>
+        <h1>展示 encode 与 decode 的完整回路</h1>
+        <p class="lede">
+          上传 EPUB 或使用内置样例：服务端会先 encode 成 IntermediateDocument，再 decode 回 EPUB，最后重新 encode 验证输出可解析。
+        </p>
+      </section>
+
+      <section class="panel controls" aria-labelledby="controls-title">
+        <div>
+          <h2 id="controls-title">输入 EPUB</h2>
+          <p>内置样例来自测试 fixtures；上传文件会直接发送到本地 8871 服务处理。</p>
+        </div>
+        <div class="actions">
+          <label class="file-picker">
+            <span>选择 EPUB 文件</span>
+            <input id="fileInput" type="file" accept=".epub,application/epub+zip" />
+          </label>
+          <button id="runUploadButton" disabled>运行上传文件</button>
+          <button id="runSampleButton" class="secondary">运行内置样例</button>
+          <a class="secondary link-button" href="/sample.epub">下载样例</a>
+        </div>
+      </section>
+
+      <section id="status" class="status" role="status" aria-live="polite">等待运行 Demo。</section>
+
+      <section class="grid" aria-label="encode decode results">
+        <article class="panel result-card">
+          <div class="card-heading">
+            <span class="step">1</span>
+            <div>
+              <h2>encode 结果</h2>
+              <p>EPUB 二进制解析出的文档结构。</p>
+            </div>
+          </div>
+          <div id="encodeResult" class="empty">尚未运行。</div>
+        </article>
+
+        <article class="panel result-card">
+          <div class="card-heading">
+            <span class="step">2</span>
+            <div>
+              <h2>decode 结果</h2>
+              <p>IntermediateDocument 生成的 EPUB 输出。</p>
+            </div>
+          </div>
+          <div id="decodeResult" class="empty">尚未运行。</div>
+          <a id="downloadDecoded" class="download hidden" download="decoded-demo.epub">下载 decode 生成的 EPUB</a>
+        </article>
+
+        <article class="panel result-card wide">
+          <div class="card-heading">
+            <span class="step">3</span>
+            <div>
+              <h2>重新 encode 验证</h2>
+              <p>decode 输出再次解析，确认 Demo 使用的是真实可读 EPUB。</p>
+            </div>
+          </div>
+          <div id="reEncodeResult" class="empty">尚未运行。</div>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="/demo.js"></script>
+  </body>
+</html>
