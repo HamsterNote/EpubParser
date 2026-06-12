@@ -33,16 +33,23 @@ jobs:
           # 根据 package.json 的 version 判断是否为预发布版本
           PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
 
+          if [[ "$VERSION" != "$PKG_VERSION" ]]; then
+            echo "::error::Branch version ($VERSION) does not match package.json version ($PKG_VERSION)."
+            exit 1
+          fi
+
           if [[ "$PKG_VERSION" =~ -dev ]]; then
-            echo "PUBLISH_TAG=dev" >> "$GITHUB_ENV"
+            PUBLISH_TAG="dev"
             echo "Version type: Dev Pre-release"
           elif [[ "$PKG_VERSION" =~ -beta ]]; then
-            echo "PUBLISH_TAG=beta" >> "$GITHUB_ENV"
+            PUBLISH_TAG="beta"
             echo "Version type: Beta Pre-release"
           else
-            echo "PUBLISH_TAG=latest" >> "$GITHUB_ENV"
+            PUBLISH_TAG="latest"
             echo "Version type: Release"
           fi
+
+          echo "PUBLISH_TAG=$PUBLISH_TAG" >> "$GITHUB_ENV"
 
           echo "Branch version: $VERSION"
           echo "Package version: $PKG_VERSION"
@@ -94,8 +101,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # 使用 npm publish 以触发 prepublishOnly（包含构建），并指定 tag 与访问级别
-          npm publish --tag "$PUBLISH_TAG" --access public
+          # 项目已在上一步显式构建；发布时跳过 npm lifecycle，避免重复执行 prepublishOnly
+          npm publish --tag "$PUBLISH_TAG" --access public --ignore-scripts
 
       # 确保预发布标签的 dist-tag 指向当前 version（支持 dev 和 beta）
       - name: Ensure pre-release dist-tag

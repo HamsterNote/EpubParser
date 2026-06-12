@@ -9,7 +9,7 @@ import {
 import { jest } from '@jest/globals'
 import { EpubDocument } from '../EpubDocument.js'
 import { EpubPage, RenderViews } from '../EpubPage.js'
-import { setPretextAdapter, resetPretextAdapter } from '../textMeasurement.js'
+import { resetPretextAdapter, setPretextAdapter } from '../textMeasurement.js'
 
 /**
  * 测试用文本测量适配器
@@ -200,6 +200,43 @@ describe('EpubDocument wrapper', () => {
     const outline = await epubDoc.getOutline()
 
     expect(outline).toBeUndefined()
+  })
+
+  it('returns the underlying cover image without requiring DOM globals', async () => {
+    const thumbnail = new IntermediateImage({
+      id: 'cover-image',
+      src: 'data:image/png;base64,FAKE',
+      polygon: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100]
+      ],
+      opacity: 1
+    })
+    const doc = new IntermediateDocument({
+      id: 'doc-with-cover',
+      title: 'Covered EPUB',
+      pagesMap: IntermediatePageMap.makeByInfoList([
+        {
+          id: 'page-1',
+          pageNumber: 1,
+          size: { x: 200, y: 200 },
+          getData: async () =>
+            new IntermediatePage({
+              id: 'page-1',
+              number: 1,
+              width: 200,
+              height: 200,
+              content: [],
+              thumbnail
+            })
+        }
+      ])
+    })
+    const epubDoc = new EpubDocument(doc)
+
+    await expect(epubDoc.getCover()).resolves.toBe(thumbnail)
   })
 })
 

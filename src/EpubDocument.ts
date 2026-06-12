@@ -1,4 +1,8 @@
-import { IntermediateDocument, IntermediateOutline } from '@hamster-note/types'
+import type {
+  IntermediateDocument,
+  IntermediateImage,
+  IntermediateOutline
+} from '@hamster-note/types'
 import { EpubPage } from './EpubPage.js'
 
 /**
@@ -43,44 +47,10 @@ export class EpubDocument {
 
   /**
    * 获取文档封面
-   * 返回第一页的缩略图作为封面
+   * 返回底层 IntermediateDocument 的封面图片数据
    */
-  async getCover(): Promise<HTMLCanvasElement | HTMLImageElement> {
-    const cover = await this.intermediateDocument.getCover()
-
-    // 创建 Image 元素
-    const img = new Image()
-
-    // 返回 Promise，等待图片加载完成
-    return new Promise((resolve) => {
-      img.onload = () => resolve(img)
-      img.onerror = () => {
-        // 如果加载失败，创建一个空白 canvas 作为后备
-        const canvas = document.createElement('canvas')
-        const firstPageSize =
-          this.intermediateDocument.getPageSizeByPageNumber(1)
-        if (firstPageSize) {
-          canvas.width = firstPageSize.x
-          canvas.height = firstPageSize.y
-        } else {
-          canvas.width = 800
-          canvas.height = 1000
-        }
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          ctx.fillStyle = '#ffffff'
-          ctx.fillRect(0, 0, canvas.width, canvas.height)
-        }
-        resolve(canvas)
-      }
-
-      if (cover?.src) {
-        img.src = cover.src
-      } else {
-        // 触发 onerror 创建空白 canvas
-        img.src = ''
-      }
-    })
+  async getCover(): Promise<IntermediateImage | undefined> {
+    return this.intermediateDocument.getCover()
   }
 
   /**
