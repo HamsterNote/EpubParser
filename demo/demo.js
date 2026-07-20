@@ -6,6 +6,8 @@ const encodeResult = document.querySelector('#encodeResult')
 const decodeResult = document.querySelector('#decodeResult')
 const reEncodeResult = document.querySelector('#reEncodeResult')
 const downloadDecoded = document.querySelector('#downloadDecoded')
+const pageNumberInput = document.querySelector('#pageNumberInput')
+const showPageButton = document.querySelector('#showPageButton')
 
 let selectedFile
 let decodedObjectUrl
@@ -79,7 +81,9 @@ const renderResults = (result) => {
   reEncodeResult.innerHTML = renderDocumentSummary(result.reEncode)
 
   if (decodedObjectUrl) URL.revokeObjectURL(decodedObjectUrl)
-  decodedObjectUrl = URL.createObjectURL(base64ToBlob(result.decode.base64, result.decode.mimeType))
+  decodedObjectUrl = URL.createObjectURL(
+    base64ToBlob(result.decode.base64, result.decode.mimeType)
+  )
   downloadDecoded.href = decodedObjectUrl
   downloadDecoded.download = result.decode.fileName
   downloadDecoded.classList.remove('hidden')
@@ -126,3 +130,49 @@ runUploadButton.addEventListener('click', async () => {
   if (!selectedFile) return
   await runRoundtrip(await selectedFile.arrayBuffer())
 })
+
+// 按页码查询页面数据并输出到 Console。
+// 数据源与运行按钮保持一致：当前选择了文件就查询上传文件，否则查询内置样例。
+const showPageData = async () => {
+  const pageNumber = Number(pageNumberInput.value)
+
+  if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+    setStatus('请输入大于等于 1 的整数页码。', true)
+    return
+  }
+
+  showPageButton.disabled = true
+  setStatus(`正在获取第 ${pageNumber} 页的 IntermediateDocument 数据…`)
+
+  try {
+    const query = `?number=${pageNumber}`
+    const response = selectedFile
+      ? await fetch(`/api/page${query}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/epub+zip' },
+          body: await selectedFile.arrayBuffer()
+        })
+      : await fetch(`/api/page${query}`)
+
+    const payload = await response.json()
+
+    if (!response.ok) {
+      throw new Error(payload.error || 'Page query failed')
+    }
+
+    // 核心输出：文档上下文 + 该页的 IntermediatePageSerialized 完整数据
+    console.log(
+      `[EpubParser Demo] 第 ${pageNumber} 页 IntermediateDocument 数据：`,
+      payload
+    )
+    setStatus(
+      `已输出第 ${pageNumber} 页数据到 Console（全文共 ${payload.document.pageCount} 页），请打开开发者工具查看。`
+    )
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    showPageButton.disabled = false
+  }
+}
+
+showPageButton.addEventListener('click', showPageData)

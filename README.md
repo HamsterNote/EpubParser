@@ -15,10 +15,10 @@ import { EpubParser } from "@hamster-note/epub-parser";
 const parser = new EpubParser();
 
 // Parse EPUB into intermediate document
-const doc = await parser.encode(input); // input: Buffer | ArrayBuffer | Uint8Array | string(path)
+const doc = await parser.encode(input); // input: Blob | File | ArrayBuffer | Uint8Array | Buffer | string(path)
 
 // Generate EPUB from intermediate document
-const epubBuffer = await parser.decode(doc); // returns Buffer | Uint8Array
+const epubBytes = await parser.decode(doc); // returns Uint8Array
 ```
 
 ### Static methods (with EPUB-specific metadata)
@@ -35,13 +35,13 @@ console.log(doc.metadata.title);
 console.log(doc.metadata.author);
 
 // Generate EPUB from intermediate document
-const epubBuffer = await EpubParser.decode(doc);
+const epubBytes = await EpubParser.decode(doc);
 ```
 
 ## Dependencies
 
-- `epub@2.1.1` for reading and parsing EPUB files
-- `epub-gen-memory@1.1.2` for generating EPUB output
+- `jszip@3.10.1` and `fast-xml-parser@5.8.0` for cross-platform EPUB parsing
+- `jszip@3.10.1` for generating EPUB output without Node.js builtins
 
 ## Supported Scope
 
@@ -50,7 +50,7 @@ const epubBuffer = await EpubParser.decode(doc);
 - Metadata extraction (title, author, and basic fields)
 - Spine and page order preservation
 - Table of Contents (TOC) when representable as `IntermediateOutline`
-- Cover and image references (where dependency APIs expose them)
+- Embedded covers and chapter images
 
 ## Excluded Scope
 
@@ -82,16 +82,16 @@ to local-only access.
 
 ## Requirements
 
-Node.js >=22.6.0 is required due to the `epub` package engine constraint.
+Browser builds require standard binary APIs (`Blob`, `ArrayBuffer`, `Uint8Array`, and `TextDecoder`). Remote image URLs additionally require `fetch`. These APIs are available in current evergreen browsers. Node.js users require Node.js >=22.6.0.
 
 ## Runtime Support
 
-| Capability | Supported runtime | Minimum Node.js | Browser status | Reason |
+| Capability | Supported runtime | Minimum Node.js | Browser status | Notes |
 | --- | --- | --- | --- | --- |
-| Parse EPUB (`encode`) | Node.js only | >=22.6.0 | Not supported | `epub@2.1.1` imports `node:fs/promises` at the package entrypoint. |
-| Generate EPUB (`decode`) | Node.js only | >=22.6.0 | Not supported through this parser | The plain `epub-gen-memory@1.1.2` import resolves Node-oriented dependencies that require `fs` and `path`. |
+| Parse EPUB (`encode`) | Browser and Node.js | >=22.6.0 | Supported | Browsers accept `Blob`, `File`, `ArrayBuffer`, and `Uint8Array`; Node.js additionally accepts `Buffer` and filesystem paths. |
+| Generate EPUB (`decode`) | Browser and Node.js | >=22.6.0 | Supported | Returns ZIP bytes as `Uint8Array` without Node.js polyfills. |
 
-No browser polyfills, Node builtin shims, or dependency swaps are included. `epub-gen-memory/dist/bundle.min.js` exists for separate browser bundling experiments, but this parser currently uses the Node package entrypoints above and does not claim browser runtime support.
+No browser polyfills or Node builtin shims are required. String path inputs and `file://` image sources remain Node.js-only because browsers cannot read arbitrary filesystem paths. Browser callers can provide images as data URLs, `File` objects, or fetchable remote URLs.
 
 ## Roundtrip Semantics
 

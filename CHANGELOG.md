@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Support EPUB parsing and generation in modern browsers using native binary and DOM APIs
+- Parse EPUB 3 navigation documents in addition to EPUB 2 NCX tables of contents
+
+### Changed
+- Replace the Node-only `epub` reader and Node-oriented generator with cross-platform `jszip` and `fast-xml-parser` implementations
+- Expose embedded image bytes as `Uint8Array` so EPUB metadata remains portable across runtimes
+
 ## [0.1.1] - 2026-06-12
 
 ### Changed

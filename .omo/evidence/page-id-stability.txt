@@ -1,0 +1,20 @@
+PageId stability verification
+Date: 2026-07-20
+
+Surface exercised:
+- Built package entrypoint: dist/index.js
+- Public APIs: EpubParser.encode() and EpubParser.decode()
+- Fixture: src/__tests__/fixtures/minimal.epub
+
+Observed IDs:
+- First load:      epub-b3b09270feb2574c-page-1
+- Second load:     epub-b3b09270feb2574c-page-1
+- EPUB roundtrip:  epub-b3b09270feb2574c-page-1
+
+Generated EPUB size: 2300 bytes
+Result: stable=true
+
+Automated quality gates:
+- yarn typecheck: passed
+- yarn test --runInBand: 9 suites, 57 tests passed
+- yarn build:all: passed

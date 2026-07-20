@@ -145,6 +145,19 @@ h2 {
   display: none;
 }
 
+/* 页码输入框：与按钮同高、圆角，保持面板内视觉一致 */
+.page-number-input {
+  background: #fff;
+  border: 1px solid rgba(31, 42, 68, 0.16);
+  border-radius: 999px;
+  color: #1f2a44;
+  font: inherit;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0 18px;
+  width: 110px;
+}
+
 .status {
   color: #586174;
   min-height: 28px;

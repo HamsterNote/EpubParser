@@ -1,15 +1,74 @@
 // Fixture generation script for EpubParser tests
-// Uses epub-gen-memory to create deterministic EPUB fixtures
 //
 // Usage: node src/__tests__/fixtures/generate.js
 
-import epubModule from 'epub-gen-memory';
-const epub = epubModule.default || epubModule;
+import JSZip from 'jszip';
 import { writeFileSync, mkdirSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const escapeXml = (value) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+const epub = async (options, chapters) => {
+  const zip = new JSZip();
+  const assets = [];
+  const renderedChapters = [];
+
+  for (const chapter of chapters) {
+    let content = chapter.content;
+    const imageMatch = /src="file:\/\/([^"]+)"/.exec(content);
+    if (imageMatch) {
+      const href = `images/image-${assets.length + 1}.png`;
+      assets.push({ href, data: await readFile(imageMatch[1]), properties: '' });
+      content = content.replace(imageMatch[0], `src="${href}"`);
+    }
+    renderedChapters.push({ ...chapter, content });
+  }
+
+  if (options.cover) {
+    assets.push({
+      href: 'images/cover.png',
+      data: await readFile(new URL(options.cover)),
+      properties: ' properties="cover-image"'
+    });
+  }
+
+  const manifest = renderedChapters
+    .map((_chapter, index) => `<item id="chapter-${index + 1}" href="chapter-${index + 1}.xhtml" media-type="application/xhtml+xml"/>`)
+    .join('');
+  const assetManifest = assets
+    .map((asset, index) => `<item id="asset-${index + 1}" href="${asset.href}" media-type="image/png"${asset.properties}/>`)
+    .join('');
+  const spine = renderedChapters
+    .map((_chapter, index) => `<itemref idref="chapter-${index + 1}"/>`)
+    .join('');
+  const navigation = renderedChapters
+    .map((chapter, index) => `<li><a href="chapter-${index + 1}.xhtml">${escapeXml(chapter.title)}</a></li>`)
+    .join('');
+
+  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
+  zip.file('META-INF/container.xml', '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+  zip.file('EPUB/package.opf', `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">fixture-book</dc:identifier><dc:title>${escapeXml(options.title)}</dc:title><dc:creator>${escapeXml(options.author)}</dc:creator><dc:language>${escapeXml(options.lang)}</dc:language><dc:publisher>${escapeXml(options.publisher)}</dc:publisher><dc:date>${escapeXml(options.date)}</dc:date><meta property="dcterms:modified">2024-01-15T00:00:00Z</meta></metadata>
+<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${manifest}${assetManifest}</manifest><spine>${spine}</spine></package>`);
+  zip.file('EPUB/nav.xhtml', `<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Table of Contents</title></head><body><nav epub:type="toc"><ol>${navigation}</ol></nav></body></html>`);
+  renderedChapters.forEach((chapter, index) => {
+    zip.file(`EPUB/chapter-${index + 1}.xhtml`, `<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${escapeXml(chapter.title)}</title></head><body>${chapter.content}</body></html>`);
+  });
+  assets.forEach((asset) => {
+    zip.file(`EPUB/${asset.href}`, asset.data);
+  });
+
+  return zip.generateAsync({ type: 'uint8array' });
+};
 
 // Ensure fixtures directory exists
 mkdirSync(__dirname, { recursive: true });
@@ -149,6 +208,32 @@ async function generateNonAsciiMetadata() {
   writeFileSync(join(__dirname, 'non-ascii-metadata.epub'), buffer);
 }
 
+// 字体样式 fixture：覆盖标题层级、上标脚注引用、aside 脚注、粗体/斜体，
+// 用于验证 encode 阶段把 HTML 语义映射为 IntermediateText 的 fontSize/fontWeight/italic。
+async function generateStyledText() {
+  const buffer = await epub(
+    {
+      ...baseOptions,
+      title: 'Styled Text Book',
+      author: 'Style Author',
+    },
+    [
+      {
+        title: 'Styled Chapter',
+        content: [
+          '<h1>Chapter Heading One</h1>',
+          '<h2>Section Heading Two</h2>',
+          '<p>Body paragraph with a note<sup>1</sup> and <b>bold</b> and <i>italic</i> words.</p>',
+          '<p>Second body line stays plain.</p>',
+          '<aside epub:type="footnote"><p>1. Footnote body text in smaller size.</p></aside>',
+        ].join(''),
+      },
+    ],
+    3
+  );
+  writeFileSync(join(__dirname, 'styled-text.epub'), buffer);
+}
+
 async function main() {
   console.log('Generating EPUB fixtures...');
 
@@ -166,6 +251,9 @@ async function main() {
 
   await generateNonAsciiMetadata();
   console.log('✓ non-ascii-metadata.epub');
+
+  await generateStyledText();
+  console.log('✓ styled-text.epub');
 
   console.log('Done! All fixtures generated.');
 }

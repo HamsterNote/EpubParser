@@ -3,6 +3,15 @@ import { fileURLToPath } from 'node:url'
 import type { IntermediateDocument } from '@hamster-note/types'
 import { EpubParser, type EpubDocumentExtensions } from '../index'
 
+// 页面内容里文本项的结构子集（避免依赖 IntermediateText 具体类形态）
+type PageText = { content: string; fontSize: number; fontWeight: number; italic: boolean; lineHeight: number; polygon: number[][] }
+
+const pageTexts = (content: unknown[]): PageText[] =>
+  content.filter(
+    (item): item is PageText =>
+      typeof item === 'object' && item !== null && 'content' in item
+  )
+
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const fixturePath = (name: string) => join(fixtureDir, name)
 
@@ -78,5 +87,62 @@ describe('EpubParser.encode', () => {
     } else {
       expect(doc.epubImages?.length ?? 0).toBeGreaterThanOrEqual(0)
     }
+  })
+
+  it('maps headings, footnotes and inline emphasis to distinct text styles', async () => {
+    const doc = await encodeFixture('styled-text.epub')
+    const pages = await doc.pages
+    const texts = pageTexts(pages[0].content as unknown[])
+
+    // 按内容定位每一行，断言其样式来自 HTML 语义而非统一常量
+    const findLine = (fragment: string): PageText => {
+      const line = texts.find((text) => text.content.includes(fragment))
+      if (!line) throw new Error(`line containing "${fragment}" not found`)
+      return line
+    }
+
+    // S1: 标题层级 → 更大的字号 + 粗体
+    const h1 = findLine('Chapter Heading One')
+    expect(h1.fontSize).toBe(28)
+    expect(h1.fontWeight).toBe(700)
+    expect(h1.lineHeight).toBeGreaterThan(24)
+
+    const h2 = findLine('Section Heading Two')
+    expect(h2.fontSize).toBe(24)
+    expect(h2.fontWeight).toBe(700)
+
+    // S1: 正文保持基准字号
+    const body = findLine('Second body line stays plain.')
+    expect(body.fontSize).toBe(16)
+    expect(body.fontWeight).toBe(400)
+    expect(body.italic).toBe(false)
+
+    // S1: aside 脚注 → 更小字号
+    const footnote = findLine('Footnote body text')
+    expect(footnote.fontSize).toBeLessThan(16)
+    expect(footnote.fontSize).toBe(12)
+
+    // S2: 混合行（含 sup/b/i 的正文）取最强语义——仍是正文段，
+    // 但粗体或斜体标记应提升 fontWeight 或 italic 之一
+    const mixed = findLine('Body paragraph with a note')
+    expect(mixed.fontSize).toBe(16)
+    expect(mixed.fontWeight === 700 || mixed.italic).toBe(true)
+
+    // S1: y 坐标按各行实际 lineHeight 累计——h1 之后正文不能再以 24 等距排布
+    expect(h2.polygon[0][1]).toBeGreaterThan(h1.polygon[0][1] + 24)
+  })
+
+  it('keeps uniform 16px layout for plain-paragraph chapters', async () => {
+    // S3: 无语义标签的普通章节保持原有 16px/400 行为不变
+    const doc = await encodeFixture('minimal.epub')
+    const pages = await doc.pages
+    const texts = pageTexts(pages[0].content as unknown[])
+
+    expect(texts.length).toBeGreaterThan(0)
+    texts.forEach((text) => {
+      expect(text.fontSize).toBe(16)
+      expect(text.fontWeight).toBe(400)
+      expect(text.italic).toBe(false)
+    })
   })
 })

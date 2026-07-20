@@ -1,0 +1,30 @@
+# 标题/脚注字体样式修复 — 验证证据 (2026-07-20 18:20)
+
+## 变更
+- src/index.ts: htmlToStyledTextLines 哨兵标记法（块级 h1-h6/aside 开闭哨兵带换行+跨行状态，行内 small/b/i 行级标记），样式映射 h1=28/700 h2=24/700 h3=20 h4=18 h5/h6=16/700，脚注=12，行高=字号*1.5，y 按实际行高累计，宽度按 fontSize 等比
+- src/__tests__/fixtures/generate.js: 新增 styled-text.epub fixture
+- src/__tests__/epubEncode.test.ts: 2 个新用例（样式映射 / 普通段落回归）
+
+## 自动化验证
+$ yarn typecheck
+tsc --noEmit → exit 0（干净）
+
+$ yarn test
+Test Suites: 9 passed, 9 total
+Tests:       56 passed, 56 total（54 原有 + 2 新增）
+
+## 手动 QA（node /tmp/qa/styled-text-qa.mjs，经 dist 构建产物 encode styled-text.epub）
+```
+--- page 0 (height=1000) ---
+y=  40 fs=28 w=700 italic=false | Chapter Heading One
+y=  82 fs=24 w=700 italic=false | Section Heading Two
+y= 118 fs=16 w=700 italic=true | Body paragraph with a note 1 and bold and italic words.
+y= 142 fs=16 w=400 italic=false | Second body line stays plain.
+y= 166 fs=12 w=400 italic=false | 1. Footnote body text in smaller size.
+```
+
+## QA 结论
+- h1=28px/700、h2=24px/700、正文=16px/400、脚注=12px —— 字号差异正确
+- y 坐标按实际行高累计：40→82(28*1.5)→118(24*1.5)→142(24)→166(24)，不再等距 24
+- 混合行（含 sup/b/i）保留正文 16px 且带上 700/italic 行级标记
+- minimal.epub 回归用例通过：普通段落仍为全 16px/400 等距布局

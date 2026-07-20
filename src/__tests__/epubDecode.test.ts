@@ -9,6 +9,8 @@ import {
   IntermediateText,
   TextDir
 } from '@hamster-note/types'
+import { jest } from '@jest/globals'
+import JSZip from 'jszip'
 import { EpubParser } from '../index'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -112,7 +114,7 @@ const makeDocument = (pages: IntermediatePage[]): IntermediateDocument => {
 }
 
 describe('EpubParser.decode', () => {
-  it('returns a ZIP-backed EPUB Buffer or Uint8Array', async () => {
+  it('returns a ZIP-backed EPUB Uint8Array', async () => {
     const output = await EpubParser.decode(
       makeDocument([makePage(1, 'First page text.'), makePage(2, 'Second page text.')])
     )
@@ -136,5 +138,43 @@ describe('EpubParser.decode', () => {
 
     await expectZipMagic(decoded)
     expect(reparsed.getIntermediateDocument().title).toBe('Minimal Test Book')
+  })
+
+  it('keeps page IDs stable across repeated loads and EPUB roundtrips', async () => {
+    // Given: the same EPUB bytes loaded independently.
+    const fixture = await readFile(join(fixturesDir, 'minimal.epub'))
+    const clock = jest
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(2_000)
+      .mockReturnValue(3_000)
+    const firstDocument = (await EpubParser.encode(fixture)).getIntermediateDocument()
+    const secondDocument = (await EpubParser.encode(fixture)).getIntermediateDocument()
+    const firstPageIds = (await firstDocument.pages).map((page) => page.id)
+    const secondPageIds = (await secondDocument.pages).map((page) => page.id)
+
+    // When: the parsed document is generated as EPUB and loaded again.
+    const roundtripBytes = await EpubParser.decode(firstDocument)
+    const roundtripDocument = (await EpubParser.encode(roundtripBytes)).getIntermediateDocument()
+    const roundtripPageIds = (await roundtripDocument.pages).map((page) => page.id)
+
+    // Then: both direct reloads and roundtrip reloads retain the original page IDs.
+    expect(secondPageIds).toEqual(firstPageIds)
+    expect(roundtripPageIds).toEqual(firstPageIds)
+    clock.mockRestore()
+  })
+
+  it('embeds page images inside the generated EPUB archive', async () => {
+    // Given: a page whose image is supplied through the Node-only file URL boundary.
+    const output = await EpubParser.decode(makeDocument([makePage(1, 'Page with image.')]))
+
+    // When: the generated EPUB ZIP is inspected as a standalone artifact.
+    const zip = await JSZip.loadAsync(await zipBytes(output))
+    const chapter = await zip.file('EPUB/chapter-1.xhtml')?.async('string')
+    const embeddedImage = await zip.file('EPUB/images/image-1.png')?.async('uint8array')
+
+    // Then: chapter markup references an archive-relative image with real bytes.
+    expect(chapter).toContain('src="images/image-1.png"')
+    expect(embeddedImage?.byteLength).toBeGreaterThan(0)
   })
 })

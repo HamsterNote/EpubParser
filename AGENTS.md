@@ -2,15 +2,18 @@
 
 ## Active Technologies
 
-- TypeScript 5.0.2 (Node.js ESM)
+- TypeScript 5.0.2 (cross-platform ESM for browsers and Node.js)
 - `@hamster-note/document-parser`, `@hamster-note/types`
-- `epub@2.1.1` for reading, `epub-gen-memory@1.1.2` for generation
+- `jszip@3.10.1` for archive I/O, `fast-xml-parser@5.8.0` for EPUB XML parsing
 
 ## Project Structure
 
 ```text
 src/
   index.ts          - EpubParser class and encode/decode logic
+  EpubArchive.ts    - Cross-platform EPUB archive reader
+  EpubGenerator.ts  - Cross-platform EPUB archive generator
+  EpubXml.ts        - OPF, NCX, and navigation XML parsing
   EpubDocument.ts   - Document wrapper
   EpubPage.ts       - Page wrapper
   __tests__/        - Jest tests and fixtures

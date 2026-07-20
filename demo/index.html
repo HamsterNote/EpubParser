@@ -26,9 +26,20 @@
             <span>选择 EPUB 文件</span>
             <input id="fileInput" type="file" accept=".epub,application/epub+zip" />
           </label>
-          <button id="runUploadButton" disabled>运行上传文件</button>
-          <button id="runSampleButton" class="secondary">运行内置样例</button>
+          <button id="runUploadButton" type="button" disabled>运行上传文件</button>
+          <button id="runSampleButton" type="button" class="secondary">运行内置样例</button>
           <a class="secondary link-button" href="/sample.epub">下载样例</a>
+        </div>
+      </section>
+
+      <section class="panel controls" aria-labelledby="page-query-title">
+        <div>
+          <h2 id="page-query-title">查看某一页的 IntermediateDocument 数据</h2>
+          <p>输入页码并点击按钮，对应页面的序列化数据（IntermediatePageSerialized）会输出到浏览器 Console。</p>
+        </div>
+        <div class="actions">
+          <input id="pageNumberInput" class="page-number-input" type="number" min="1" step="1" value="1" aria-label="页码" />
+          <button id="showPageButton" type="button" class="secondary">输出页面数据到 Console</button>
         </div>
       </section>
 
