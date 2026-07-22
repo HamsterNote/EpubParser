@@ -1,26 +1,32 @@
-import JSZip, { type JSZipObject } from 'jszip'
+import { Book, type NavItem, Navigation } from '@likecoin/epub-ts'
 import type {
   EpubArchiveImage,
   EpubArchiveMetadata,
   EpubManifestItem,
   EpubTocElement
 } from './EpubArchiveTypes.js'
-import { validateEpubArchiveSize } from './EpubArchiveLimits.js'
-import {
-  MAX_EPUB_ENTRY_BYTES,
-  MAX_EPUB_TOTAL_ENTRY_BYTES
-} from './EpubArchiveLimits.js'
-import {
-  asArray,
-  isRecord,
-  parseNavigationDocument,
-  parseNcx,
-  parsePackageDocument,
-  parseXml,
-  resolveArchivePath
-} from './EpubXml.js'
+import { EpubResourceReader } from './EpubResourceReader.js'
 
-const textDecoder = new TextDecoder('utf-8')
+const resolveArchivePath = (baseFile: string, path: string): string => {
+  const pathWithoutQuery = path.split('?')[0]
+  if (!pathWithoutQuery) return baseFile
+  if (pathWithoutQuery.startsWith('/')) return pathWithoutQuery.slice(1)
+
+  const parts = [...baseFile.split('/').slice(0, -1), ...pathWithoutQuery.split('/')]
+  const normalized: string[] = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') normalized.pop()
+    else normalized.push(part)
+  }
+  return normalized.join('/')
+}
+
+const toArrayBuffer = (input: Uint8Array): ArrayBuffer => {
+  const buffer = new ArrayBuffer(input.byteLength)
+  new Uint8Array(buffer).set(input)
+  return buffer
+}
 
 export class EpubArchive {
   readonly metadata: EpubArchiveMetadata = {}
@@ -29,67 +35,84 @@ export class EpubArchive {
   readonly flow: EpubManifestItem[] = []
   readonly toc: EpubTocElement[] = []
   version = '2.0'
-  private rootFile = ''
-  private zip?: JSZip
-  private readonly expandedBytesByEntry = new Map<string, number>()
-  private expandedBytes = 0
+  private resources?: EpubResourceReader
 
   constructor(private readonly input: Uint8Array) {}
 
   async parse(): Promise<void> {
-    validateEpubArchiveSize(this.input)
-    try {
-      this.zip = await JSZip.loadAsync(this.input)
-    } catch {
-      throw new Error('Invalid/missing file')
-    }
-    if (!Object.keys(this.zip.files).length) throw new Error('No files in archive')
-
-    const mimeFile = this.findEntry('mimetype')
+    this.resources = await EpubResourceReader.open(this.input)
+    const mimeFile = this.resources.findEntry('mimetype')
     if (!mimeFile) throw new Error('No mimetype file in archive')
-    if ((await this.readText(mimeFile)).toLowerCase().trim() !== 'application/epub+zip') {
+    if ((await this.resources.readText(mimeFile)).toLowerCase().trim() !== 'application/epub+zip') {
       throw new Error('Unsupported mime type')
     }
 
-    const containerFile = this.findEntry('meta-inf/container.xml')
+    const containerFile = this.resources.findEntry('meta-inf/container.xml')
     if (!containerFile) throw new Error('No container file in archive')
-    const container = parseXml(await this.readText(containerFile))
-    const rootfiles = isRecord(container.rootfiles) ? container.rootfiles.rootfile : undefined
-    const rootfile = asArray(rootfiles).find(
-      (value) =>
-        isRecord(value) &&
-        String(value['@_media-type']).toLowerCase() === 'application/oebps-package+xml' &&
-        typeof value['@_full-path'] === 'string'
-    )
-    if (!isRecord(rootfile) || typeof rootfile['@_full-path'] !== 'string') {
-      throw new Error('Rootfile not found from archive')
-    }
 
-    this.rootFile = rootfile['@_full-path']
-    const parsed = parsePackageDocument(parseXml(await this.readText(this.rootFile)), this.rootFile)
-    Object.assign(this.metadata, parsed.metadata)
-    Object.assign(this.manifest, parsed.manifest)
-    this.guide.push(...parsed.guide)
-    this.flow.push(...parsed.flow)
-    this.version = parsed.version
+    const BookConstructor = typeof DOMParser === 'undefined'
+      ? (await import('@likecoin/epub-ts/node')).Book
+      : Book
+    const book = new BookConstructor(toArrayBuffer(this.input), { replacements: 'none' })
 
-    const ncx = parsed.tocId ? this.manifest[parsed.tocId] : undefined
-    let ncxError: unknown
-    if (ncx) {
-      try {
-        this.toc.push(...parseNcx(parseXml(await this.readText(ncx.href)), ncx.href, this.manifest))
-      } catch (error) {
-        ncxError = error
+    try {
+      await book.opened
+      const rootFile = book.container?.packagePath
+      if (!rootFile) throw new Error('Rootfile not found from archive')
+
+      const packageDirectory = rootFile.split('/').slice(0, -1).join('/')
+      const resolvePackagePath = (href: string): string =>
+        resolveArchivePath(packageDirectory ? `${packageDirectory}/package.opf` : 'package.opf', href)
+
+      Object.assign(this.metadata, {
+        identifier: book.packaging.metadata.identifier,
+        creator: book.packaging.metadata.creator,
+        creatorFileAs: book.packaging.metadata.creator,
+        title: book.packaging.metadata.title,
+        language: book.packaging.metadata.language.toLowerCase(),
+        date: book.packaging.metadata.pubdate,
+        description: book.packaging.metadata.description,
+        publisher: book.packaging.metadata.publisher
+      })
+
+      for (const [id, item] of Object.entries(book.packaging.manifest)) {
+        this.manifest[id] = {
+          id,
+          href: resolvePackagePath(item.href),
+          'media-type': item.type,
+          properties: item.properties.join(' ')
+        }
       }
-    }
 
-    const nav = Object.values(this.manifest).find((item) =>
-      String(item.properties ?? '').split(/\s+/).includes('nav')
-    )
-    if (this.toc.length === 0 && nav) {
-      this.toc.push(...parseNavigationDocument(await this.readText(nav.href), nav.href, this.manifest))
-    } else if (ncxError) {
-      throw ncxError
+      const cover = Object.entries(book.packaging.manifest).find(
+        ([, item]) => item.href === book.packaging.coverPath
+      )
+      if (cover) this.metadata.cover = cover[0]
+
+      this.flow.push(
+        ...book.packaging.spine.flatMap((item) => {
+          const manifestItem = this.manifest[item.idref]
+          return manifestItem ? [manifestItem] : []
+        })
+      )
+      let navigationItems = book.navigation.toc
+      if (navigationItems.length === 0 && book.packaging.navPath) {
+        const navPath = resolvePackagePath(book.packaging.navPath)
+        const navDocument = new DOMParser().parseFromString(
+          await this.resources.readText(navPath),
+          'application/xhtml+xml'
+        )
+        for (const navElement of navDocument.querySelectorAll('nav')) {
+          const types = navElement.getAttribute('epub:type')?.split(/\s+/) ?? []
+          if (types.includes('toc')) navElement.setAttribute('epub:type', 'toc')
+        }
+        navigationItems = new Navigation(navDocument).toc
+      }
+      const navigationPath = book.packaging.navPath || book.packaging.ncxPath
+      const navigationFile = navigationPath ? resolvePackagePath(navigationPath) : rootFile
+      this.toc.push(...this.flattenToc(navigationItems, navigationFile, 0))
+    } finally {
+      book.destroy()
     }
   }
 
@@ -127,7 +150,7 @@ export class EpubArchive {
     if (!['application/xhtml+xml', 'image/svg+xml'].includes(item['media-type'])) {
       throw new Error('Invalid mime type for chapter')
     }
-    return this.readText(item.href)
+    return this.getResources().readText(item.href)
   }
 
   async getImage(id: string): Promise<EpubArchiveImage> {
@@ -136,55 +159,12 @@ export class EpubArchive {
     if (!item['media-type'].toLowerCase().startsWith('image/')) {
       throw new Error('Invalid mime type for image')
     }
-    return { data: await this.readBytes(item.href), mimeType: item['media-type'] }
+    return { data: await this.getResources().readBytes(item.href), mimeType: item['media-type'] }
   }
 
-  private findEntry(target: string): string | undefined {
-    return Object.keys(this.zip?.files ?? {}).find((name) => name.toLowerCase() === target)
-  }
-
-  private getEntry(name: string): JSZipObject {
-    const entry = this.zip?.file(name)
-    if (!entry) throw new Error(`Entry not found: ${name}`)
-    return entry
-  }
-
-  private async readBytes(name: string): Promise<Uint8Array> {
-    const previousBytes = this.expandedBytesByEntry.get(name) ?? 0
-    const chunks: Uint8Array[] = []
-    let entryBytes = 0
-
-    await new Promise<void>((resolve, reject) => {
-      const stream = this.getEntry(name).internalStream('uint8array')
-      stream
-        .on('data', (chunk) => {
-          entryBytes += chunk.byteLength
-          const projectedTotal = this.expandedBytes - previousBytes + entryBytes
-          if (entryBytes > MAX_EPUB_ENTRY_BYTES || projectedTotal > MAX_EPUB_TOTAL_ENTRY_BYTES) {
-            stream.pause()
-            reject(new Error('EPUB archive expanded data exceeds the size limit'))
-            return
-          }
-          chunks.push(chunk)
-        })
-        .on('error', reject)
-        .on('end', resolve)
-        .resume()
-    })
-
-    const bytes = new Uint8Array(entryBytes)
-    let offset = 0
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    this.expandedBytes = this.expandedBytes - previousBytes + entryBytes
-    this.expandedBytesByEntry.set(name, entryBytes)
-    return bytes
-  }
-
-  private async readText(name: string): Promise<string> {
-    return textDecoder.decode(await this.readBytes(name))
+  private getResources(): EpubResourceReader {
+    if (!this.resources) throw new Error('Archive has not been parsed')
+    return this.resources
   }
 
   private findManifestByResolvedHref(chapterId: string, source: string): EpubManifestItem | undefined {
@@ -192,5 +172,25 @@ export class EpubArchive {
     if (!chapter) return undefined
     const href = resolveArchivePath(chapter.href, source).split('#')[0]
     return Object.values(this.manifest).find((item) => item.href.split('#')[0] === href)
+  }
+
+  private flattenToc(items: NavItem[], rootFile: string, level: number): EpubTocElement[] {
+    if (level > 7) return []
+
+    return items.flatMap((item, index) => {
+      const href = resolveArchivePath(rootFile, item.href)
+      const manifestItem = Object.values(this.manifest).find(
+        (candidate) => candidate.href.split('#')[0] === href.split('#')[0]
+      )
+      const current: EpubTocElement = {
+        ...(manifestItem ?? {}),
+        level,
+        order: index + 1,
+        title: item.label,
+        id: manifestItem?.id ?? item.id,
+        href
+      }
+      return [current, ...this.flattenToc(item.subitems ?? [], rootFile, level + 1)]
+    })
   }
 }

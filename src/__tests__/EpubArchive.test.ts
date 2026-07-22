@@ -37,6 +37,37 @@ describe('EpubArchive cross-version navigation', () => {
     ])
   })
 
+  it('resolves table-of-contents links relative to the navigation document', async () => {
+    // Given: a nav document in a different directory from the OPF and chapter.
+    const zip = new JSZip()
+    zip.file('mimetype', 'application/epub+zip')
+    zip.file(
+      'META-INF/container.xml',
+      '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    zip.file(
+      'EPUB/package.opf',
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Nested Navigation</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="navigation/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+    )
+    zip.file(
+      'EPUB/navigation/nav.xhtml',
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="../text/chapter.xhtml#start">Chapter One</a></li></ol></nav></body></html>'
+    )
+    zip.file(
+      'EPUB/text/chapter.xhtml',
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="start">Chapter One</h1></body></html>'
+    )
+    const archive = new EpubArchive(await zip.generateAsync({ type: 'uint8array' }))
+
+    // When: navigation is parsed through epub-ts.
+    await archive.parse()
+
+    // Then: the href resolves from the nav file and still maps to the manifest item.
+    expect(archive.toc).toEqual([
+      expect.objectContaining({ title: 'Chapter One', href: 'EPUB/text/chapter.xhtml#start', id: 'chapter' })
+    ])
+  })
+
   it('preserves image sources that are not represented in the manifest', async () => {
     // Given: chapter markup containing an external image reference.
     const archive = new EpubArchive(await makeArchive())

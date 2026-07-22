@@ -40,8 +40,9 @@ const epubBytes = await EpubParser.decode(doc);
 
 ## Dependencies
 
-- `jszip@3.10.1` and `fast-xml-parser@5.8.0` for cross-platform EPUB parsing
-- `jszip@3.10.1` for generating EPUB output without Node.js builtins
+- `@likecoin/epub-ts@0.6.9` for EPUB metadata, spine, and navigation parsing
+- `linkedom@0.18.13` supplies the DOM parser used by `@likecoin/epub-ts` in Node.js
+- `jszip@3.10.1` for bounded archive resource reads and generating EPUB output without Node.js builtins
 
 ## Supported Scope
 

@@ -28,8 +28,11 @@ describe('Node runtime support', () => {
         default: expect.anything()
       })
     )
-    await expect(import('fast-xml-parser')).resolves.toEqual(
-      expect.objectContaining({ XMLParser: expect.any(Function) })
+    await expect(import('@likecoin/epub-ts')).resolves.toEqual(
+      expect.objectContaining({ Book: expect.any(Function) })
+    )
+    await expect(import('linkedom')).resolves.toEqual(
+      expect.objectContaining({ DOMParser: expect.any(Function) })
     )
   })
 
@@ -48,14 +51,15 @@ describe('Node runtime support', () => {
     expect(reparsed.getIntermediateDocument().title).toBe('Minimal Test Book')
   })
 
-  it('keeps package metadata free of the Node-only EPUB dependencies', async () => {
+  it('declares the cross-platform EPUB parsing dependencies', async () => {
     const packageJson: unknown = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'))
 
     expect(packageJson).toEqual(
       expect.objectContaining({
         dependencies: expect.objectContaining({
-          'fast-xml-parser': '5.8.0',
-          jszip: '3.10.1'
+          '@likecoin/epub-ts': '0.6.9',
+          jszip: '3.10.1',
+          linkedom: '0.18.13'
         })
       })
     )

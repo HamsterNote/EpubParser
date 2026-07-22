@@ -4,16 +4,18 @@
 
 - TypeScript 5.0.2 (cross-platform ESM for browsers and Node.js)
 - `@hamster-note/document-parser`, `@hamster-note/types`
-- `jszip@3.10.1` for archive I/O, `fast-xml-parser@5.8.0` for EPUB XML parsing
+- `@likecoin/epub-ts@0.6.9` for EPUB metadata, spine, and navigation parsing
+- `jszip@3.10.1` for bounded archive resource I/O and EPUB generation
+- `linkedom@0.18.13` for the Node.js DOM implementation used by `@likecoin/epub-ts`
 
 ## Project Structure
 
 ```text
 src/
   index.ts          - EpubParser class and encode/decode logic
-  EpubArchive.ts    - Cross-platform EPUB archive reader
+  EpubArchive.ts    - Cross-platform `@likecoin/epub-ts` adapter
+  EpubResourceReader.ts - Size-limited EPUB archive resource reader
   EpubGenerator.ts  - Cross-platform EPUB archive generator
-  EpubXml.ts        - OPF, NCX, and navigation XML parsing
   EpubDocument.ts   - Document wrapper
   EpubPage.ts       - Page wrapper
   __tests__/        - Jest tests and fixtures

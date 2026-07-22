@@ -5,8 +5,10 @@ export default {
   external: [
     '@hamster-note/document-parser',
     '@hamster-note/types',
-    'fast-xml-parser',
-    'jszip'
+    '@likecoin/epub-ts',
+    '@likecoin/epub-ts/node',
+    'jszip',
+    'linkedom'
   ],
   plugins: [dts()],
   output: [{ dir: 'dist', format: 'es', sourcemap: true }]

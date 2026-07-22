@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0-beta] - 2026-07-22
+
+### Changed
+- Replace the hand-written EPUB XML parsing layer with `@likecoin/epub-ts@0.6.9` for metadata, spine, and navigation parsing
+- Keep archive resource reads behind the existing per-entry and total expanded-size limits
+
+### Removed
+- Remove the internal `EpubXml` module and `fast-xml-parser` dependency
+
+### Dependencies
+- Add `@likecoin/epub-ts@0.6.9` for EPUB structure parsing
+- Add `linkedom@0.18.13` for the Node.js DOM implementation used by `@likecoin/epub-ts`
 
 ## [0.2.0-beta] - 2026-07-22
 
