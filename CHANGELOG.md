@@ -7,13 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-beta] - 2026-07-22
+
 ### Added
-- Support EPUB parsing and generation in modern browsers using native binary and DOM APIs
-- Parse EPUB 3 navigation documents in addition to EPUB 2 NCX tables of contents
+- Cross-platform EPUB archive reader (`EpubArchive`) using `jszip`, removing Node-only `epub` dependency
+- Cross-platform EPUB archive generator (`EpubGenerator`) using `jszip`, removing Node-only `epub-gen-memory` dependency
+- EPUB XML parsing module (`EpubXml`) with OPF, NCX, and EPUB 3 navigation document support
+- Browser runtime test suite verifying Blob/ArrayBuffer input and Blob/`Uint8Array` output compatibility
+- Semantic styled text parsing with heading levels (h1-h6), footnotes, bold, and italic mapping to `IntermediateText`
+- Custom base64 encode/decode to replace `Buffer.toString('base64')` for cross-runtime portability
+- Stable EPUB document ID generation via FNV-1a content fingerprinting
+- Evidence documentation for browser support verification and page ID stability
 
 ### Changed
-- Replace the Node-only `epub` reader and Node-oriented generator with cross-platform `jszip` and `fast-xml-parser` implementations
-- Expose embedded image bytes as `Uint8Array` so EPUB metadata remains portable across runtimes
+- Replace the Node-only `epub` reader and `epub-gen-memory` generator with cross-platform `jszip` 3.10.1 and `fast-xml-parser` 5.8.0 implementations
+- Expose embedded image bytes as `Uint8Array` instead of `Buffer` for portable runtime support
+- Use actual line-height-based Y positioning instead of fixed `LINE_HEIGHT` spacing
+- Update demo server to load and display EPUB content via the cross-platform API
+- Improve test fixture generation to use `jszip` directly instead of `epub-gen-memory`
+- Update Node runtime tests to verify dependency removal and Rolldown external configuration
+
+### Removed
+- `epub@2.1.1` and `epub-gen-memory@1.1.2` dependencies
+- Temporary directory-based image bridge in `decode` flow
+- `getBuiltinModule('fs/promises')` write/rm operations from the decode path
+
+### Dependencies
+- `jszip@3.10.1` for cross-platform ZIP I/O
+- `fast-xml-parser@5.8.0` for cross-platform XML parsing
 
 ## [0.1.1] - 2026-06-12
 

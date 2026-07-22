@@ -1,0 +1,94 @@
+EPUB annotation compatibility investigation
+Date: 2026-07-20
+
+Result: blocked by @hamster-note/types@0.8.0.
+
+Inspected contracts
+-------------------
+- IntermediateDocumentSerialized only contains id, pages, title, and outline.
+- IntermediatePageSerialized only contains id, content/texts, paragraphs, dimensions,
+  page number, and thumbnail.
+- IntermediateTextSerialized only contains text, typography, polygon, direction,
+  opacity, skew, and end-of-line state.
+- IntermediateParagraphSerialized only groups textIds inside a rectangle.
+- IntermediateOutline supports text/page/position/URL destinations, but represents
+  document navigation rather than annotations.
+- IntermediateTextMarkedContent represents PDF marked-content boundaries. Its type
+  and markedContentId are protected and IntermediateText.serialize() omits both.
+
+Runtime verification
+--------------------
+The QA driver attaches an annotations property to an IntermediateDocument, then calls
+IntermediateDocument.serialize(). The serialized result does not contain annotations.
+The same driver serializes IntermediateTextMarkedContent and confirms that neither
+type nor markedContentId survives.
+
+Observed output:
+- documentKeys: pages, id, title, outline
+- annotationsSurvived: false
+- markedTypeSurvived: false
+- markedContentIdSurvived: false
+
+Project gates:
+- yarn typecheck: passed
+- yarn test --runInBand: 9 suites and 57 tests passed
+- yarn build:all: passed
+
+Rejected local workarounds
+--------------------------
+- A parser-only epubAnnotations extension would be lost by the shared serializer and
+  would not be visible through the @hamster-note/types public contract.
+- IntermediateOutline would misclassify annotations as table-of-contents entries.
+- IntermediateText.color can preserve foreground appearance only; it cannot represent
+  a highlight range, note body, bookmark, selector, or annotation identity.
+- IntermediateTextMarkedContent is a PDF content-stream concept and is not serializable.
+
+Minimum shared type capability required
+---------------------------------------
+1. A serializable IntermediateAnnotation model with a stable id and a discriminated
+   kind such as highlight, note, or bookmark.
+2. A serializable target/selector that can address an existing page/text plus optional
+   character offsets. EPUB CFI or source href/fragment should be available for EPUB
+   source fidelity when a text-id mapping is insufficient.
+3. Optional annotation body and presentation fields such as note text and color.
+4. An annotations collection on IntermediateDocumentSerialized and
+   IntermediateDocument, preserved by serialize() and parse().
+
+No sibling package was modified, as required by AGENTS.md.
+
+@hamster-note/types 0.9.0 follow-up
+-----------------------------------
+Reviewed the published @hamster-note/types@0.9.0 package from the npm registry in
+an isolated temporary directory. The project itself still declares and installs 0.8.0.
+
+Verdict: 0.9.0 removes the original serialization blocker and is sufficient to begin
+EpubParser annotation integration.
+
+Confirmed capabilities:
+- IntermediateDocument and IntermediateDocumentSerialized expose annotations.
+- IntermediateDocument.serialize() and parse() serialize and restore annotations.
+- IntermediateAnnotation supports highlight, underline, squiggly, strikeout, note,
+  link, and bookmark types.
+- Text anchors support pageId, optional textId, character offsets, text hashes, and
+  surrounding context for fallback matching.
+- Region anchors support pageId and one or more quadrilateral polygons.
+- Annotation payload preserves selected text, note body, color, link destination,
+  EPUB CFI range, author, and created/updated timestamps.
+
+Runtime roundtrip verification:
+- Constructed highlight, note, and bookmark annotations.
+- Serialized an IntermediateDocument, passed the result through JSON, parsed it, and
+  serialized it again.
+- annotationCount: 3
+- roundtripEqual: true
+
+Non-blocking semantic improvements:
+- There is no dedicated page anchor. A page-level bookmark can currently use a
+  zero-length text anchor with pageId and charIndex 0, but an anchor kind of "page"
+  would express that intent more directly.
+- cfiRange provides canonical EPUB source positioning when available. If annotations
+  may lack a CFI, optional sourceHref/sourceFragment fields would improve rebinding to
+  the original spine document after parser implementation details change.
+- The annotation class is type-tagged, but its optional fields are not a discriminated
+  union: NOTE does not require note and LINK does not require dest. This is usable but
+  allows semantically incomplete values at compile time.
