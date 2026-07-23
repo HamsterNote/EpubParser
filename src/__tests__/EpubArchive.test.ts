@@ -110,9 +110,8 @@ describe('EpubArchive cross-version navigation', () => {
     )
     zip.file(
       'EPUB/package.opf',
-      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Limit Test</dc:title></metadata><manifest><item id="oversized" href="oversized.png" media-type="image/png"/></manifest><spine/></package>'
+      `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Limit Test</dc:title></metadata><manifest/><spine/><!--${'x'.repeat(16 * 1024 * 1024 + 1)}--></package>`
     )
-    zip.file('EPUB/oversized.png', new Uint8Array(16 * 1024 * 1024 + 1))
     const bytes = await zip.generateAsync({
       type: 'uint8array',
       compression: 'DEFLATE',
@@ -125,16 +124,14 @@ describe('EpubArchive cross-version navigation', () => {
         const fileNameLength = view.getUint16(offset + (signature === 0x04034b50 ? 26 : 28), true)
         const fileNameOffset = offset + (signature === 0x04034b50 ? 30 : 46)
         const fileName = new TextDecoder().decode(bytes.subarray(fileNameOffset, fileNameOffset + fileNameLength))
-        if (fileName === 'EPUB/oversized.png') {
+        if (fileName === 'EPUB/package.opf') {
           view.setUint32(offset + (signature === 0x04034b50 ? 22 : 24), 1, true)
         }
       }
     }
 
-    // When: the forged entry is inflated through the public archive reader.
-    const archive = new EpubArchive(bytes)
-    await archive.parse()
-    const result = archive.getImage('oversized')
+    // When: the forged entry is preflighted before third-party EPUB parsing begins.
+    const result = new EpubArchive(bytes).parse()
 
     // Then: actual streamed output is capped independently from attacker-controlled metadata.
     await expect(result).rejects.toThrow('EPUB archive expanded data exceeds the size limit')

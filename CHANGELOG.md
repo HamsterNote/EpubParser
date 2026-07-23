@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0-beta.1] - 2026-07-23
+
+### Security
+- Add `validateExpandedSizes()` preflight check in `EpubResourceReader` before `@likecoin/epub-ts` initialization, preventing forged ZIP metadata from bypassing expanded-size limits
+
+### Changed
+- Refactor oversized-entry test to use an oversized OPF instead of a separate oversized image entry, covering the preflight code path directly
+
 ## [0.3.0-beta] - 2026-07-22
 
 ### Changed

@@ -10,8 +10,8 @@ const textDecoder = new TextDecoder('utf-8')
 /**
  * 受限的 EPUB ZIP 读取器。
  *
- * `@likecoin/epub-ts` 负责解释 EPUB 结构；此类只负责在读取资源时执行
- * 独立于 ZIP 元数据的实际展开大小限制，避免伪造中央目录尺寸绕过保护。
+ * `@likecoin/epub-ts` 负责解释 EPUB 结构；此类在第三方解析前预检实际展开大小，
+ * 并对后续资源读取执行同一限制，避免伪造中央目录尺寸绕过保护。
  */
 export class EpubResourceReader {
   private readonly expandedBytesByEntry = new Map<string, number>()
@@ -30,7 +30,9 @@ export class EpubResourceReader {
     }
 
     if (!Object.keys(zip.files).length) throw new Error('No files in archive')
-    return new EpubResourceReader(zip)
+    const reader = new EpubResourceReader(zip)
+    await reader.validateExpandedSizes()
+    return reader
   }
 
   findEntry(target: string): string | undefined {
@@ -74,6 +76,33 @@ export class EpubResourceReader {
     this.expandedBytes = this.expandedBytes - previousBytes + entryBytes
     this.expandedBytesByEntry.set(name, entryBytes)
     return bytes
+  }
+
+  private async validateExpandedSizes(): Promise<void> {
+    for (const [name, entry] of Object.entries(this.zip.files)) {
+      if (entry.dir) continue
+
+      let entryBytes = 0
+      await new Promise<void>((resolve, reject) => {
+        const stream = entry.internalStream('uint8array')
+        stream
+          .on('data', (chunk) => {
+            entryBytes += chunk.byteLength
+            if (
+              entryBytes > MAX_EPUB_ENTRY_BYTES ||
+              this.expandedBytes + entryBytes > MAX_EPUB_TOTAL_ENTRY_BYTES
+            ) {
+              stream.pause()
+              reject(new Error('EPUB archive expanded data exceeds the size limit'))
+            }
+          })
+          .on('error', reject)
+          .on('end', resolve)
+          .resume()
+      })
+      this.expandedBytes += entryBytes
+      this.expandedBytesByEntry.set(name, entryBytes)
+    }
   }
 
   private getEntry(name: string): JSZipObject {
