@@ -78,7 +78,8 @@ const makePage = (pageNumber: number, content: string): IntermediatePage => {
     width: 800,
     height: 1000,
     content: [makeText(`page-${pageNumber}-text`, content, 40), image],
-    thumbnail: image
+    thumbnail: image,
+    useFlowLayout: true
   })
 }
 

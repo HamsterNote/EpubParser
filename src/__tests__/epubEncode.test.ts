@@ -32,6 +32,7 @@ describe('EpubParser.encode', () => {
     expect(doc.metadata?.author).toBe('Test Author')
     expect(doc.pageCount).toBeGreaterThanOrEqual(1)
     expect(pages.length).toBeGreaterThanOrEqual(1)
+    expect(pages.every((page) => page.useFlowLayout === true)).toBe(true)
     expect(pages[0].number).toBe(1)
     expect(pages[0].content.some((item) => 'content' in item)).toBe(true)
   })

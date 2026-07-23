@@ -71,7 +71,8 @@ const buildSinglePageDocument = (): {
           width: 200,
           height: 200,
           content: [text],
-          thumbnail: undefined
+          thumbnail: undefined,
+          useFlowLayout: true
         })
     }
   ]
@@ -108,7 +109,8 @@ const buildMultiPageDocument = (): {
           width: 400,
           height: 400,
           content: [textA],
-          thumbnail: undefined
+          thumbnail: undefined,
+          useFlowLayout: true
         })
     },
     {
@@ -122,7 +124,8 @@ const buildMultiPageDocument = (): {
           width: 400,
           height: 400,
           content: [textB],
-          thumbnail: undefined
+          thumbnail: undefined,
+          useFlowLayout: true
         })
     }
   ]
@@ -229,7 +232,8 @@ describe('EpubDocument wrapper', () => {
               width: 200,
               height: 200,
               content: [],
-              thumbnail
+              thumbnail,
+              useFlowLayout: true
             })
         }
       ])
@@ -250,7 +254,8 @@ describe('EpubPage wrapper', () => {
         width: 200,
         height: 300,
         content: [text],
-        thumbnail: undefined
+        thumbnail: undefined,
+        useFlowLayout: true
       })
     )
 
@@ -266,7 +271,8 @@ describe('EpubPage wrapper', () => {
         width: 200,
         height: 300,
         content: [text],
-        thumbnail: undefined
+        thumbnail: undefined,
+        useFlowLayout: true
       })
     )
 
@@ -285,7 +291,8 @@ describe('EpubPage wrapper', () => {
         width: 200,
         height: 300,
         content: [text1, text2],
-        thumbnail: undefined
+        thumbnail: undefined,
+        useFlowLayout: true
       })
     )
 
@@ -312,7 +319,8 @@ describe('EpubPage wrapper', () => {
         width: 200,
         height: 300,
         content: [text, image],
-        thumbnail: undefined
+        thumbnail: undefined,
+        useFlowLayout: true
       })
     )
 
@@ -338,7 +346,8 @@ describe('EpubPage wrapper', () => {
         width: 200,
         height: 300,
         content: [image],
-        thumbnail: undefined
+        thumbnail: undefined,
+        useFlowLayout: true
       })
     )
 
@@ -357,7 +366,8 @@ describe('EpubPage wrapper', () => {
           width: 200,
           height: 200,
           content: [text],
-          thumbnail: undefined
+          thumbnail: undefined,
+          useFlowLayout: true
         })
       )
 

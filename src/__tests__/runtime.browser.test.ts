@@ -46,7 +46,8 @@ describe('Browser runtime support', () => {
           skew: 0,
           isEOL: true
         })
-      ]
+      ],
+      useFlowLayout: true
     })
     const document = new IntermediateDocument({
       id: 'browser-document',
@@ -84,7 +85,8 @@ describe('Browser runtime support', () => {
       number: 1,
       width: 800,
       height: 1000,
-      content: []
+      content: [],
+      useFlowLayout: true
     })
     const document = new IntermediateDocument({
       id: 'language-document',

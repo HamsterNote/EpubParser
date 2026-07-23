@@ -942,7 +942,8 @@ export class EpubParser extends DocumentParser {
               width: PAGE_WIDTH,
               height: pageHeight,
               content: [...texts, ...images],
-              thumbnail: undefined
+              thumbnail: undefined,
+              useFlowLayout: true
             })
         })
     }
