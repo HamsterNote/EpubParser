@@ -68,6 +68,32 @@ describe('EpubArchive cross-version navigation', () => {
     ])
   })
 
+  it('reads archive entries referenced by percent-encoded manifest paths', async () => {
+    // Given: an OPF URI encodes a space while the ZIP entry stores the decoded filename.
+    const zip = new JSZip()
+    zip.file('mimetype', 'application/epub+zip')
+    zip.file(
+      'META-INF/container.xml',
+      '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    zip.file(
+      'EPUB/package.opf',
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Encoded Path</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="text/chapter%201.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+    )
+    zip.file(
+      'EPUB/text/chapter 1.xhtml',
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>Encoded chapter path</p></body></html>'
+    )
+    const archive = new EpubArchive(await zip.generateAsync({ type: 'uint8array' }))
+    await archive.parse()
+
+    // When: the chapter is read through its manifest identifier.
+    const chapter = await archive.getChapter('chapter')
+
+    // Then: the URI maps to the decoded ZIP entry name.
+    expect(chapter).toContain('Encoded chapter path')
+  })
+
   it('preserves image sources that are not represented in the manifest', async () => {
     // Given: chapter markup containing an external image reference.
     const archive = new EpubArchive(await makeArchive())

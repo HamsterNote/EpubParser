@@ -8,18 +8,28 @@ import type {
 import { EpubResourceReader } from './EpubResourceReader.js'
 
 const resolveArchivePath = (baseFile: string, path: string): string => {
-  const pathWithoutQuery = path.split('?')[0]
-  if (!pathWithoutQuery) return baseFile
-  if (pathWithoutQuery.startsWith('/')) return pathWithoutQuery.slice(1)
+  const fragmentIndex = path.indexOf('#')
+  const fragment = fragmentIndex >= 0 ? path.slice(fragmentIndex) : ''
+  const pathAndQuery = fragmentIndex >= 0 ? path.slice(0, fragmentIndex) : path
+  let archivePath = pathAndQuery.split('?')[0] ?? ''
+  try {
+    archivePath = decodeURIComponent(archivePath)
+  } catch (error) {
+    // Malformed URI escapes are preserved so third-party EPUB metadata cannot crash path resolution.
+    if (!(error instanceof URIError)) throw error
+  }
 
-  const parts = [...baseFile.split('/').slice(0, -1), ...pathWithoutQuery.split('/')]
+  if (!archivePath) return `${baseFile}${fragment}`
+  if (archivePath.startsWith('/')) return `${archivePath.slice(1)}${fragment}`
+
+  const parts = [...baseFile.split('/').slice(0, -1), ...archivePath.split('/')]
   const normalized: string[] = []
   for (const part of parts) {
     if (!part || part === '.') continue
     if (part === '..') normalized.pop()
     else normalized.push(part)
   }
-  return normalized.join('/')
+  return `${normalized.join('/')}${fragment}`
 }
 
 const toArrayBuffer = (input: Uint8Array): ArrayBuffer => {

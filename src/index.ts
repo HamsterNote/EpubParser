@@ -268,7 +268,8 @@ const resolveEmbeddedImageSource = async (src: string): Promise<string | undefin
   if (/^https?:\/\//i.test(src)) {
     const response = await fetch(src)
     if (!response.ok) throw new Error(`Failed to load EPUB image: HTTP ${response.status}`)
-    const mimeType = response.headers.get('content-type')?.split(';')[0] || mimeTypeFromPath(src)
+    const responseMimeType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    const mimeType = responseMimeType?.startsWith('image/') ? responseMimeType : mimeTypeFromPath(src)
     return toImageDataUrl(new Uint8Array(await response.arrayBuffer()), mimeType)
   }
 

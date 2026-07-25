@@ -178,4 +178,39 @@ describe('EpubParser.decode', () => {
     expect(chapter).toContain('src="images/image-1.png"')
     expect(embeddedImage?.byteLength).toBeGreaterThan(0)
   })
+
+  it('infers a remote image type when the server returns a generic content type', async () => {
+    // Given: a PNG URL whose server returns valid bytes as application/octet-stream.
+    const imageBytes = await readFile(join(fixturesDir, 'red.png'))
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(imageBytes, { headers: { 'content-type': 'application/octet-stream' } })
+    )
+    const page = makePage(1, 'Page with remote image.')
+    const remoteImage = new IntermediateImage({
+      id: 'remote-image',
+      src: 'https://cdn.example.test/remote.png',
+      polygon: [
+        [40, 90],
+        [120, 90],
+        [120, 170],
+        [40, 170]
+      ],
+      opacity: 1
+    })
+    page.content = [makeText('remote-text', 'Page with remote image.', 40), remoteImage]
+
+    try {
+      // When: the document is generated and inspected as a standalone EPUB.
+      const output = await EpubParser.decode(makeDocument([page]))
+      const zip = await JSZip.loadAsync(await zipBytes(output))
+      const chapter = await zip.file('EPUB/chapter-1.xhtml')?.async('string')
+      const embeddedImage = await zip.file('EPUB/images/image-1.png')?.async('uint8array')
+
+      // Then: the URL extension supplies image/png and the bytes are embedded.
+      expect(chapter).toContain('src="images/image-1.png"')
+      expect(embeddedImage).toEqual(new Uint8Array(imageBytes))
+    } finally {
+      fetchMock.mockRestore()
+    }
+  })
 })
