@@ -1,0 +1,38 @@
+@hamster-note/types 0.10.0 dependency upgrade
+Date: 2026-07-21
+
+Dependency state
+----------------
+- package.json pins @hamster-note/types to exact version 0.10.0.
+- yarn.lock resolves the published types-0.10.0.tgz package.
+- node_modules and yarn why both report @hamster-note/types@0.10.0.
+
+Project gates
+-------------
+- yarn typecheck: passed.
+- yarn test --runInBand: 9 suites and 57 tests passed.
+- yarn build:all: passed.
+- git diff --check: passed.
+
+Runtime consumer QA
+-------------------
+- Imported IntermediateAnnotation, IntermediateAnnotationType,
+  IntermediateTextAlign, and isPageAnchor from the installed package.
+- Parsed and serialized a document containing a page bookmark with an EPUB
+  href/fragment source and a centered paragraph.
+- JSON parse/serialize roundtrip remained deeply equal.
+- EpubParser.encode parsed minimal.epub as "Minimal Test Book" with one page.
+
+Observed result
+---------------
+- annotationRoundtripEqual: true
+- anchorKind: page
+- textAlign: center
+- epubTitle: Minimal Test Book
+- epubPageCount: 1
+
+Compatibility note
+------------------
+Yarn reports that @hamster-note/document-parser@0.3.1 declares the older peer
+range @hamster-note/types@^0.5.1. This warning pre-dates the upgrade path and
+did not cause typecheck, test, build, or runtime failures with 0.10.0.

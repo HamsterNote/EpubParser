@@ -22,18 +22,17 @@ describe('Node runtime support', () => {
     expect(major > 22 || (major === 22 && minor >= 6)).toBe(true)
   })
 
-  it('loads EPUB read and generation dependencies through Node ESM dynamic import', async () => {
-    await expect(import('epub')).resolves.toEqual(
-      expect.objectContaining({
-        EPub: expect.any(Function),
-        default: expect.any(Function)
-      })
-    )
-
-    await expect(import('epub-gen-memory')).resolves.toEqual(
+  it('loads cross-platform EPUB dependencies', async () => {
+    await expect(import('jszip')).resolves.toEqual(
       expect.objectContaining({
         default: expect.anything()
       })
+    )
+    await expect(import('@likecoin/epub-ts')).resolves.toEqual(
+      expect.objectContaining({ Book: expect.any(Function) })
+    )
+    await expect(import('linkedom')).resolves.toEqual(
+      expect.objectContaining({ DOMParser: expect.any(Function) })
     )
   })
 
@@ -52,16 +51,32 @@ describe('Node runtime support', () => {
     expect(reparsed.getIntermediateDocument().title).toBe('Minimal Test Book')
   })
 
-  it('documents browser import limitations from Task 2 evidence instead of adding polyfills', async () => {
-    const [browserCompatibility, nodeImport] = await Promise.all([
-      readFile(join(repoRoot, '.omo/evidence/task-2-browser-compatibility.txt'), 'utf8'),
-      readFile(join(repoRoot, '.omo/evidence/task-2-dependency-node-import.txt'), 'utf8')
-    ])
+  it('declares the cross-platform EPUB parsing dependencies', async () => {
+    const packageJson: unknown = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'))
 
-    expect(browserCompatibility).toContain('Could not resolve "node:fs/promises"')
-    expect(browserCompatibility).toContain('Could not resolve "fs"')
-    expect(browserCompatibility).toContain('Could not resolve "path"')
-    expect(browserCompatibility).toContain('No polyfills or shims were added')
-    expect(nodeImport).toContain('dist/epub.js imports node:fs/promises at top level')
+    expect(packageJson).toEqual(
+      expect.objectContaining({
+        dependencies: expect.objectContaining({
+          '@likecoin/epub-ts': '0.6.9',
+          jszip: '3.10.1',
+          linkedom: '0.18.13'
+        })
+      })
+    )
+    expect(JSON.stringify(packageJson)).not.toContain('"epub":"2.1.1"')
+    expect(JSON.stringify(packageJson)).not.toContain('"epub-gen-memory"')
+  })
+
+  it('keeps shared HamsterNote classes external to preserve consumer identity', async () => {
+    // Given: the package build configuration used for the public distribution.
+    const { default: config } = await import('../../rolldown.config')
+
+    // When: its runtime externals are inspected.
+    const external = config.external
+
+    // Then: shared base and data-model packages resolve from the consumer dependency graph.
+    expect(external).toEqual(
+      expect.arrayContaining(['@hamster-note/document-parser', '@hamster-note/types'])
+    )
   })
 })

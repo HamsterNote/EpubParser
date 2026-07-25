@@ -47,15 +47,6 @@ module.exports = {
         useESM: true
       }
     ],
-    // 转换 node_modules 中 epub 相关包的 ESM JS 文件
-    'node_modules/epub(.+)?/.+\\.js$': [
-      'ts-jest',
-      {
-        tsconfig: 'tsconfig.jest.json',
-        isolatedModules: true,
-        useESM: true
-      }
-    ],
     // 转换 node_modules 中 happy-dom 的 ESM JS 文件
     'node_modules/happy-dom/.+\\.js$': [
       'ts-jest',
@@ -70,5 +61,5 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   // 不忽略 @hamster-note 包，允许 Jest 转换它们
-  transformIgnorePatterns: ['/node_modules/(?!(@hamster-note|epub|happy-dom)/)']
+  transformIgnorePatterns: ['/node_modules/(?!(@hamster-note|happy-dom)/)']
 }

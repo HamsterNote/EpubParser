@@ -2,48 +2,45 @@ import { DocumentParser, type ParserInput } from '@hamster-note/document-parser'
 import {
   IntermediateDocument,
   IntermediateImage,
-  type IntermediateOutlineDest,
   IntermediateOutline,
+  type IntermediateOutlineDest,
   IntermediateOutlineDestType,
   IntermediatePage,
   IntermediatePageMap,
   IntermediateText,
   TextDir
 } from '@hamster-note/types'
-import { EPub, type ManifestItem, type TocElement } from 'epub'
-import epubGenMemoryModule, { type Content, type Options } from 'epub-gen-memory'
+import { EpubArchive } from './EpubArchive.js'
+import type { EpubManifestItem, EpubTocElement } from './EpubArchiveTypes.js'
 import { EpubDocument } from './EpubDocument.js'
+import {
+  type EpubContentItem,
+  type EpubGeneratorOptions,
+  generateEpub
+} from './EpubGenerator.js'
 
 export { EpubDocument } from './EpubDocument.js'
-export { EpubPage, RenderViews, type RenderOptions } from './EpubPage.js'
+export { EpubPage, type RenderOptions, RenderViews } from './EpubPage.js'
 
 type BrowserBinaryInput = ArrayBuffer | Uint8Array | File | Blob
-type NodeBinaryInput = Buffer | string
-type EpubParserInput = ParserInput | BrowserBinaryInput | NodeBinaryInput
-type NormalizedEpubInput = Buffer | Uint8Array
+type NodeBinaryInput = string
+export type EpubParserInput = ParserInput | BrowserBinaryInput | NodeBinaryInput
+type NormalizedEpubInput = Uint8Array
 type EpubImageKind = 'image' | 'cover'
-type EpubGenerator = (
-  options: Options,
-  content: Content,
-  ...args: (boolean | number)[]
-) => Promise<Blob | Buffer | Uint8Array>
-type DecodeCleanupTask = () => Promise<void>
 type ImageDataUrl = {
-  bytes: Buffer
+  bytes: Uint8Array
   extension: string
   mimeType: string
 }
 type NodeProcessWithBuiltins = typeof process & {
   getBuiltinModule?: (moduleName: 'fs/promises') => {
-    readFile(path: string): Promise<Buffer>
-    writeFile(path: string, data: Buffer): Promise<void>
-    mkdtemp(prefix: string): Promise<string>
-    rm(path: string, options?: { force?: boolean; recursive?: boolean }): Promise<void>
+    readFile(path: string): Promise<Uint8Array>
   }
 }
 
 export interface EpubDocumentMetadata {
   title: string
+  identifier?: string
   author?: string
   language?: string
   publisher?: string
@@ -56,7 +53,7 @@ export interface EpubAssetReference {
   mimeType: string
   kind: EpubImageKind
   src?: string
-  data?: Buffer
+  data?: Uint8Array
   error?: string
 }
 
@@ -65,7 +62,7 @@ export interface EpubDocumentExtensions {
   epubMetadata: EpubDocumentMetadata
   epubImages: EpubAssetReference[]
   epubCover?: EpubAssetReference
-  epubTocItems: TocElement[]
+  epubTocItems: EpubTocElement[]
   epubTocMappingLimitation?: string
 }
 
@@ -76,9 +73,6 @@ type QuadPolygon = [[number, number], [number, number], [number, number], [numbe
 const unsupportedInputError = () => new Error('Unsupported EPUB input')
 const invalidIntermediateError = (message: string) =>
   new Error(`Invalid intermediate document: ${message}`)
-const generateEpub = ((epubGenMemoryModule as { default?: unknown }).default ??
-  epubGenMemoryModule) as EpubGenerator
-
 const PAGE_WIDTH = 800
 const PAGE_MARGIN_X = 40
 const PAGE_MARGIN_Y = 40
@@ -86,6 +80,47 @@ const FONT_SIZE = 16
 const LINE_HEIGHT = 24
 const FONT_FAMILY = 'sans-serif'
 const TEXT_COLOR = '#000000'
+const CANONICAL_DOCUMENT_ID = /^epub-[0-9a-f]{16}$/
+
+/**
+ * 标题层级 → 字号映射（基准 16px，接近常见 EPUB 阅读器的排版比例）
+ */
+const HEADING_FONT_SIZES: Record<number, number> = {
+  1: 28,
+  2: 24,
+  3: 20,
+  4: 18,
+  5: 16,
+  6: 16
+}
+
+/** 脚注/辅助文本（sup/sub/small/aside[footnote]/epub:type=noteref）的字号 */
+const FOOTNOTE_FONT_SIZE = 12
+
+/** 行高统一取字号的 1.5 倍，与正文 16px→24px 保持一致 */
+const lineHeightForFontSize = (fontSize: number): number => fontSize * 1.5
+
+/**
+ * 带语义样式的文本行 —— htmlToStyledTextLines 的输出，
+ * 承载从 HTML 标签（h1-h6、sup、aside、b/i 等）推断出的排版信息。
+ */
+type StyledTextLine = {
+  content: string
+  fontSize: number
+  lineHeight: number
+  fontWeight: number
+  italic: boolean
+}
+
+/** 行内样式标记已内联为字符串集合（'h1'..'h6' | 'fn' | 'b' | 'i'），无需独立类型 */
+
+// 哨兵字符：EPUB 章节正文中不会出现私用区码点，用作标签边界的占位符
+const SENTINEL_OPEN = '\uE000'
+const SENTINEL_CLOSE = '\uE001'
+
+/** 用哨兵包裹标签名的正则替换，保留语义供后续分段解析 */
+const markTag = (html: string, tagPattern: RegExp, name: string): string =>
+  html.replace(tagPattern, `${SENTINEL_OPEN}${name}${SENTINEL_CLOSE}`)
 
 const isBlobLike = (input: unknown): input is Blob => {
   return typeof Blob !== 'undefined' && input instanceof Blob
@@ -97,6 +132,43 @@ const isArrayBuffer = (input: unknown): input is ArrayBuffer => {
 
 const isNodeBuffer = (input: unknown): input is Buffer => {
   return typeof Buffer !== 'undefined' && Buffer.isBuffer(input)
+}
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  let output = ''
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0
+    const second = bytes[index + 1] ?? 0
+    const third = bytes[index + 2] ?? 0
+    const combined = (first << 16) | (second << 8) | third
+    output += alphabet[(combined >> 18) & 63]
+    output += alphabet[(combined >> 12) & 63]
+    output += index + 1 < bytes.length ? alphabet[(combined >> 6) & 63] : '='
+    output += index + 2 < bytes.length ? alphabet[combined & 63] : '='
+  }
+  return output
+}
+
+const base64ToBytes = (base64: string): Uint8Array => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  const clean = base64.replace(/\s/g, '').replace(/=+$/, '')
+  const output = new Uint8Array(Math.floor((clean.length * 6) / 8))
+  let buffer = 0
+  let bits = 0
+  let outputIndex = 0
+  for (const character of clean) {
+    const value = alphabet.indexOf(character)
+    if (value < 0) throw new Error('Invalid base64 image data')
+    buffer = (buffer << 6) | value
+    bits += 6
+    if (bits >= 8) {
+      bits -= 8
+      output[outputIndex] = (buffer >> bits) & 0xff
+      outputIndex += 1
+    }
+  }
+  return output
 }
 
 const copyArrayBufferView = (input: ArrayBufferView): Uint8Array => {
@@ -163,40 +235,52 @@ const isIntermediateImageContent = (item: unknown): item is IntermediateImage =>
   return item instanceof IntermediateImage || (isRecord(item) && typeof item.src === 'string')
 }
 
-const isFetchableImageSource = (src: string): boolean => {
-  return /^(https?:|file:)\/\//i.test(src)
-}
-
 const parseImageDataUrl = (src: string): ImageDataUrl | undefined => {
   const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i.exec(src)
   if (!match) return undefined
 
   const [, mimeType, base64] = match
   const extension = mimeType.split('/')[1]?.replace(/[^a-z0-9]+/gi, '') || 'png'
-  const bytes = Buffer.from(base64.replace(/\s/g, ''), 'base64')
+  const bytes = base64ToBytes(base64)
   return { bytes, extension, mimeType }
 }
 
-const createTemporaryImageSource = async (
-  src: string,
-  fallbackName: string,
-  cleanupTasks: DecodeCleanupTask[]
-): Promise<string | undefined> => {
-  const imageData = parseImageDataUrl(src)
+const mimeTypeFromPath = (path: string): string => {
+  const extension = path.split(/[?#]/)[0]?.split('.').pop()?.toLowerCase()
+  const mediaTypes: Record<string, string> = {
+    gif: 'image/gif',
+    jpeg: 'image/jpeg',
+    jpg: 'image/jpeg',
+    png: 'image/png',
+    svg: 'image/svg+xml',
+    webp: 'image/webp'
+  }
+  return extension ? mediaTypes[extension] ?? 'application/octet-stream' : 'application/octet-stream'
+}
+
+const toImageDataUrl = (bytes: Uint8Array, mimeType: string): string => {
+  return `data:${mimeType};base64,${bytesToBase64(bytes)}`
+}
+
+const resolveEmbeddedImageSource = async (src: string): Promise<string | undefined> => {
+  if (parseImageDataUrl(src)) return src
+
+  if (/^https?:\/\//i.test(src)) {
+    const response = await fetch(src)
+    if (!response.ok) throw new Error(`Failed to load EPUB image: HTTP ${response.status}`)
+    const responseMimeType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    const mimeType = responseMimeType?.startsWith('image/') ? responseMimeType : mimeTypeFromPath(src)
+    return toImageDataUrl(new Uint8Array(await response.arrayBuffer()), mimeType)
+  }
+
+  if (!/^file:\/\//i.test(src)) return undefined
   const fsPromises = typeof process === 'undefined'
     ? undefined
     : (process as NodeProcessWithBuiltins).getBuiltinModule?.('fs/promises')
-  if (!imageData || !fsPromises) return undefined
+  if (!fsPromises) return undefined
 
-  // epub-gen-memory embeds chapter images by fetching URLs, so data URLs need a
-  // short-lived local file bridge in Node. The directory is removed in decode's finally block.
-  const directory = await fsPromises.mkdtemp('/tmp/hamster-note-epub-decode-')
-  const safeName = fallbackName.replace(/[^a-z0-9._-]+/gi, '-') || 'image'
-  const filePath = `${directory}/${safeName}.${imageData.extension}`
-  await fsPromises.writeFile(filePath, imageData.bytes)
-  cleanupTasks.push(() => fsPromises.rm(directory, { force: true, recursive: true }))
-
-  return `file://${filePath}`
+  const path = decodeURIComponent(new URL(src).pathname)
+  return toImageDataUrl(await fsPromises.readFile(path), mimeTypeFromPath(path))
 }
 
 const renderTextParagraphs = (texts: IntermediateText[]): string => {
@@ -224,15 +308,10 @@ const renderTextParagraphs = (texts: IntermediateText[]): string => {
   return paragraphs.join('')
 }
 
-const renderImageParagraphs = async (
-  images: IntermediateImage[],
-  cleanupTasks: DecodeCleanupTask[]
-): Promise<string> => {
+const renderImageParagraphs = async (images: IntermediateImage[]): Promise<string> => {
   const sources = await Promise.all(
-    images.map(async (image, index) => {
-      const src = isFetchableImageSource(image.src)
-        ? image.src
-        : await createTemporaryImageSource(image.src, image.id || `image-${index + 1}`, cleanupTasks)
+    images.map(async (image) => {
+      const src = await resolveEmbeddedImageSource(image.src)
 
       return src
         ? `<p><img src="${escapeHtml(src)}" alt="${escapeHtml(image.id)}" /></p>`
@@ -273,37 +352,26 @@ const assertZipMagic = (output: ParserInput): void => {
 
 const normalizeGeneratedOutput = async (
   output: Blob | Buffer | Uint8Array
-): Promise<ParserInput> => {
-  if (isNodeBuffer(output)) return output
+): Promise<Uint8Array> => {
+  if (isNodeBuffer(output)) {
+    return new Uint8Array(output.buffer, output.byteOffset, output.byteLength).slice()
+  }
   if (output instanceof Uint8Array) return output
 
   return new Uint8Array(await output.arrayBuffer())
 }
 
-const dataUrlToCoverFile = (src: string, fallbackName: string): File | undefined => {
-  if (typeof File === 'undefined') return undefined
-
-  const imageData = parseImageDataUrl(src)
-  if (!imageData) return undefined
-
-  return new File([Uint8Array.from(imageData.bytes)], `${fallbackName}.${imageData.extension}`, {
-    type: imageData.mimeType
-  })
-}
-
 const resolveDecodeCover = async (
   intermediateDocument: IntermediateDocument
-): Promise<Options['cover'] | undefined> => {
+): Promise<EpubGeneratorOptions['cover'] | undefined> => {
   const documentRecord = intermediateDocument as unknown as EpubDocumentWithExtensions
   const src = documentRecord.epubCover?.src ?? (await intermediateDocument.getCover(1))?.src
 
   if (!src) return undefined
-  if (isFetchableImageSource(src)) return src
-
-  return dataUrlToCoverFile(src, `${intermediateDocument.id || 'epub'}-cover`)
+  return resolveEmbeddedImageSource(src)
 }
 
-const readPathInput = async (path: string): Promise<Buffer> => {
+const readPathInput = async (path: string): Promise<Uint8Array> => {
   const nodeProcess: NodeProcessWithBuiltins | undefined =
     typeof process === 'undefined' ? undefined : process
   const fsPromises = nodeProcess?.getBuiltinModule?.('fs/promises')
@@ -313,14 +381,6 @@ const readPathInput = async (path: string): Promise<Buffer> => {
   }
 
   return fsPromises.readFile(path)
-}
-
-const toEpubConstructorInput = (input: NormalizedEpubInput): Buffer | ArrayBuffer => {
-  if (isNodeBuffer(input)) {
-    return input
-  }
-
-  return input.slice().buffer as ArrayBuffer
 }
 
 const stringFromUnknown = (value: unknown): string | undefined => {
@@ -334,6 +394,35 @@ const stringFromUnknown = (value: unknown): string | undefined => {
   }
 
   return undefined
+}
+
+/**
+ * 生成跨运行时一致的 64 位内容指纹。这里使用两个独立的 32 位 FNV-1a
+ * 累加器，避免依赖 Node.js crypto，同时保持浏览器和 Node.js 结果一致。
+ */
+const stableFingerprint = (bytes: Uint8Array): string => {
+  let first = 0x811c9dc5
+  let second = 0x9e3779b9
+
+  for (const byte of bytes) {
+    first = Math.imul(first ^ byte, 0x01000193)
+    second = Math.imul(second ^ byte, 0x85ebca6b)
+  }
+
+  return `${(first >>> 0).toString(16).padStart(8, '0')}${(second >>> 0)
+    .toString(16)
+    .padStart(8, '0')}`
+}
+
+const makeStableDocumentId = (
+  metadata: EpubMetadataSource,
+  input: Uint8Array
+): string => {
+  const identifier = getMetadataString(metadata, 'identifier', 'UUID')
+  if (identifier && CANONICAL_DOCUMENT_ID.test(identifier)) return identifier
+
+  const fingerprintSource = identifier ? new TextEncoder().encode(identifier) : input
+  return `epub-${stableFingerprint(fingerprintSource)}`
 }
 
 const getMetadataString = (
@@ -353,12 +442,13 @@ const getMetadataString = (
 
 const extractEpubMetadata = (metadata: EpubMetadataSource): EpubDocumentMetadata => {
   const title = getMetadataString(metadata, 'title') ?? 'Untitled EPUB'
+  const identifier = getMetadataString(metadata, 'identifier', 'UUID')
   const author = getMetadataString(metadata, 'creator', 'author', 'creatorFileAs')
   const language = getMetadataString(metadata, 'language')
   const publisher = getMetadataString(metadata, 'publisher')
   const date = getMetadataString(metadata, 'date')
 
-  return { title, author, language, publisher, date }
+  return { title, identifier, author, language, publisher, date }
 }
 
 /**
@@ -390,35 +480,129 @@ const decodeHtmlEntity = (entity: string): string => {
 }
 
 /**
- * 从 EPUB 章节 HTML 中提取纯文本行。
+ * 从 EPUB 章节 HTML 中提取带语义样式的文本行。
  *
- * **注意：这不是一个完整的 HTML 解析器。** 它使用正则进行最小化的文本提取，
- * 专门处理 EPUB 章节内容的典型结构（段落、标题、列表、换行等）。
- * 不支持嵌套标签的语义分析，也不保留任何格式信息。
+ * **注意：这不是一个完整的 HTML 解析器。** 它在原有正则文本提取的基础上，
+ * 先用私用区哨兵字符（\uE000/\uE001）为语义标签打标记，再按行解释这些标记，
+ * 从而在不引入 DOM 的前提下保留标题层级、脚注、粗体、斜体等排版信息。
  *
  * 处理流程：
  * 1. 移除 <script> 和 <style> 标签及其内容
- * 2. 将块级标签（p、div、h1-h6 等）和 <br> 转换为换行符
- * 3. 剥离剩余 HTML 标签
- * 4. 解码 HTML 实体
- * 5. 按行分割，清理空白，过滤空行
+ * 2. 为 h1-h6、sup/sub/small、aside[footnote]、epub:type=noteref、b/strong、i/em 打哨兵标记
+ * 3. 将块级标签（p、div、h1-h6 等）和 <br> 转换为换行符
+ * 4. 剥离剩余 HTML 标签并解码 HTML 实体
+ * 5. 按行切分，解释每行内的哨兵标记，合成该行的样式（取"最强"语义：标题 > 脚注 > 粗斜体）
+ * 6. 清理空白，过滤空行
  */
-const htmlToTextLines = (html: string): string[] => {
-  const text = html
+const htmlToStyledTextLines = (html: string): StyledTextLine[] => {
+  // 第一步：剥离 script/style，随后给语义标签打哨兵标记（标记格式：\uE000名称\uE001）
+  let marked = html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+
+  // 标题 h1-h6：开标签标记为 h1..h6，闭标签标记为 /h1../h6（带斜杠前缀表示关闭）。
+  // 标题本身是块级元素，开闭标签都附带换行，
+  // 这样原本靠 </h1> 等块级闭合产生的行边界在哨兵替换后仍然保留。
+  marked = marked.replace(
+    /<h([1-6])\b[^>]*>/gi,
+    (_match, level) => `\n${SENTINEL_OPEN}h${level}${SENTINEL_CLOSE}\n`
+  )
+  marked = marked.replace(
+    /<\/h([1-6])\s*>/gi,
+    (_match, level) => `\n${SENTINEL_OPEN}/h${level}${SENTINEL_CLOSE}\n`
+  )
+  // 脚注类（行级）：aside[footnote] 整块、small 文本按小字号处理。
+  // aside 是块级元素，与标题一样在哨兵两侧附带换行以保留行边界。
+  // sup/sub/noteref 属于行内上标引用，行级样式保持正文（由渲染层自行处理上标），
+  // 因此不参与行级标记。
+  marked = marked.replace(/<aside\b[^>]*>/gi, `\n${SENTINEL_OPEN}fn${SENTINEL_CLOSE}\n`)
+  marked = marked.replace(/<\/aside\s*>/gi, `\n${SENTINEL_OPEN}/fn${SENTINEL_CLOSE}\n`)
+  // small/b/i 是行内元素：开闭哨兵不附带换行，通常与内容同行
+  marked = markTag(marked, /<(small)\b[^>]*>/gi, 'fn')
+  marked = markTag(marked, /<\/(small)\s*>/gi, '/fn')
+  marked = markTag(marked, /<(?:b|strong)\b[^>]*>/gi, 'b')
+  marked = markTag(marked, /<\/(?:b|strong)\s*>/gi, '/b')
+  marked = markTag(marked, /<(?:i|em)\b[^>]*>/gi, 'i')
+  marked = markTag(marked, /<\/(?:i|em)\s*>/gi, '/i')
+
+  // 第二步：块级边界转换为换行（哨兵标记不受影响，会随行保留）
+  const withBreaks = marked
     .replace(/<br\s*\/?\s*>/gi, '\n')
-    .replace(/<\/(p|div|section|article|header|footer|h[1-6]|li|tr|table)>/gi, '\n')
+    .replace(/<\/(p|div|section|article|header|footer|li|tr|table)>/gi, '\n')
     .replace(/<li\b[^>]*>/gi, '\n')
+    // 标题标签已在打标记阶段被哨兵替换，这里无需再处理
     .replace(/<[^>]+>/g, ' ')
     .replace(/&([a-zA-Z][a-zA-Z0-9]+|#[0-9]+|#x[0-9a-fA-F]+);/g, (_match, entity) =>
       decodeHtmlEntity(entity)
     )
 
-  return text
+  // 第三步：逐行解释哨兵标记，合成样式。
+  // 样式来源 = 进入本行时的跨行激活状态 ∪ 本行内的开哨兵：
+  // - 块级元素（h1-h6、aside）的开/闭哨兵通常独占一行，靠跨行状态把样式传给内容行；
+  // - 行内元素（small/b/i）的开闭哨兵与内容同行，必须记入行级标记，
+  //   否则同一行内先开後闭会把状态清零、丢失粗斜体。
+  const sentinelPattern = new RegExp(`${SENTINEL_OPEN}([^\uE001]*)${SENTINEL_CLOSE}`, 'g')
+
+  let activeHeading = 0
+  let activeFootnote = false
+  let activeBold = false
+  let activeItalic = false
+
+  return withBreaks
     .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, ' ').trim())
-    .filter(Boolean)
+    .map((rawLine) => {
+      // 进入本行时的激活状态即为本行基础样式
+      const lineMarks = new Set<string>()
+      if (activeHeading) lineMarks.add(`h${activeHeading}`)
+      if (activeFootnote) lineMarks.add('fn')
+      if (activeBold) lineMarks.add('b')
+      if (activeItalic) lineMarks.add('i')
+
+      for (const match of rawLine.matchAll(sentinelPattern)) {
+        const name = match[1]
+        const isClose = name.startsWith('/')
+        const base = isClose ? name.slice(1) : name
+        const headingMatch = /^h([1-6])$/.exec(base)
+        if (headingMatch) {
+          activeHeading = isClose ? 0 : Number(headingMatch[1])
+          if (!isClose) lineMarks.add(base)
+        } else if (base === 'fn') {
+          activeFootnote = !isClose
+          if (!isClose) lineMarks.add('fn')
+        } else if (base === 'b') {
+          activeBold = !isClose
+          if (!isClose) lineMarks.add('b')
+        } else if (base === 'i') {
+          activeItalic = !isClose
+          if (!isClose) lineMarks.add('i')
+        }
+      }
+      const content = rawLine
+        .replace(sentinelPattern, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      if (!content) return undefined
+
+      const headingLevel = [1, 2, 3, 4, 5, 6].find((level) => lineMarks.has(`h${level}`))
+      const isFootnote = lineMarks.has('fn')
+      const isBold = lineMarks.has('b')
+      const isItalic = lineMarks.has('i')
+
+      // 样式合成：标题 > 脚注 > 正文；粗斜体可叠加在任意级别上
+      const fontSize = headingLevel
+        ? HEADING_FONT_SIZES[headingLevel]
+        : isFootnote
+          ? FOOTNOTE_FONT_SIZE
+          : FONT_SIZE
+      return {
+        content,
+        fontSize,
+        lineHeight: lineHeightForFontSize(fontSize),
+        fontWeight: headingLevel || isBold ? 700 : 400,
+        italic: isItalic
+      }
+    })
+    .filter((line): line is StyledTextLine => line !== undefined)
 }
 
 const textPolygon = (x: number, y: number, width: number, height: number): QuadPolygon => [
@@ -428,21 +612,25 @@ const textPolygon = (x: number, y: number, width: number, height: number): QuadP
   [x, y + height]
 ]
 
-const makeText = (id: string, content: string, x: number, y: number): IntermediateText => {
-  const width = Math.min(PAGE_WIDTH - PAGE_MARGIN_X * 2, Math.max(80, content.length * 8))
+const makeText = (id: string, line: StyledTextLine, x: number, y: number): IntermediateText => {
+  // 宽度估算按字号等比缩放：8px/字符 是基准字号 16px 时的经验值
+  const width = Math.min(
+    PAGE_WIDTH - PAGE_MARGIN_X * 2,
+    Math.max(80, line.content.length * 8 * (line.fontSize / FONT_SIZE))
+  )
 
   return new IntermediateText({
     id,
-    content,
-    fontSize: FONT_SIZE,
+    content: line.content,
+    fontSize: line.fontSize,
     fontFamily: FONT_FAMILY,
-    fontWeight: 400,
-    italic: false,
+    fontWeight: line.fontWeight,
+    italic: line.italic,
     color: TEXT_COLOR,
-    polygon: textPolygon(x, y, width, LINE_HEIGHT),
-    lineHeight: LINE_HEIGHT,
-    ascent: FONT_SIZE * 0.8,
-    descent: FONT_SIZE * 0.2,
+    polygon: textPolygon(x, y, width, line.lineHeight),
+    lineHeight: line.lineHeight,
+    ascent: line.fontSize * 0.8,
+    descent: line.fontSize * 0.2,
     dir: TextDir.LTR,
     opacity: 1,
     skew: 0,
@@ -450,29 +638,41 @@ const makeText = (id: string, content: string, x: number, y: number): Intermedia
   })
 }
 
+/**
+ * 章节 HTML → 文本内容列表。y 坐标按各行实际 lineHeight 累计，
+ * 因此标题（更高行高）之后的内容会自然下移，不再按固定 24px 等距排布。
+ */
 const htmlToTexts = (html: string, pageId: string): IntermediateText[] => {
-  return htmlToTextLines(html).map((line, index) =>
-    makeText(
-      `${pageId}-text-${index + 1}`,
-      line,
-      PAGE_MARGIN_X,
-      PAGE_MARGIN_Y + index * LINE_HEIGHT
-    )
-  )
+  const lines = htmlToStyledTextLines(html)
+  const texts: IntermediateText[] = []
+  let y = PAGE_MARGIN_Y
+
+  lines.forEach((line, index) => {
+    texts.push(makeText(`${pageId}-text-${index + 1}`, line, PAGE_MARGIN_X, y))
+    y += line.lineHeight
+  })
+
+  return texts
 }
 
-const getPageHeight = (contentCount: number, imageCount = 0): number => {
-  const textHeight = PAGE_MARGIN_Y * 2 + Math.max(1, contentCount) * LINE_HEIGHT
+const getPageHeight = (contentCount: number, imageCount = 0, textBlockHeight?: number): number => {
+  // textBlockHeight 为各行 lineHeight 的实际总和；缺省时回退到旧的等距估算
+  const textHeight =
+    PAGE_MARGIN_Y * 2 + (textBlockHeight ?? Math.max(1, contentCount) * LINE_HEIGHT)
   const imageHeight = imageCount * 220
   return Math.max(1000, textHeight + imageHeight)
 }
+
+/** 文本块实际占用高度（各行 lineHeight 之和，供页面高度与图片起始位置使用） */
+const sumTextBlockHeight = (texts: IntermediateText[]): number =>
+  texts.reduce((sum, text) => sum + text.lineHeight, 0)
 
 const dataUrlFromAsset = (asset: EpubAssetReference): string | undefined => {
   if (!asset.data || !asset.mimeType) {
     return asset.src
   }
 
-  return `data:${asset.mimeType};base64,${asset.data.toString('base64')}`
+  return `data:${asset.mimeType};base64,${bytesToBase64(asset.data)}`
 }
 
 const extractChapterImageIds = (html: string): string[] => {
@@ -517,15 +717,15 @@ const createPageImages = (
   })
 }
 
-const isImageManifestItem = (item: ManifestItem): boolean => {
+const isImageManifestItem = (item: EpubManifestItem): boolean => {
   return String(item['media-type'] ?? '').toLowerCase().startsWith('image/')
 }
 
-const getManifestItemProperties = (item: ManifestItem): string => {
+const getManifestItemProperties = (item: EpubManifestItem): string => {
   return String(item.properties ?? item['@_properties'] ?? '').toLowerCase()
 }
 
-const isNavigationManifestItem = (item: ManifestItem): boolean => {
+const isNavigationManifestItem = (item: EpubManifestItem): boolean => {
   const href = item.href.split('#')[0].toLowerCase()
   const fileName = href.split('/').pop()
   const mediaType = String(item['media-type'] ?? '').toLowerCase()
@@ -539,9 +739,9 @@ const isNavigationManifestItem = (item: ManifestItem): boolean => {
 }
 
 const findManifestItemByHref = (
-  manifest: Record<string, ManifestItem>,
+  manifest: Record<string, EpubManifestItem>,
   href: string | undefined
-): ManifestItem | undefined => {
+): EpubManifestItem | undefined => {
   if (!href) {
     return undefined
   }
@@ -550,7 +750,7 @@ const findManifestItemByHref = (
   return Object.values(manifest).find((item) => item.href.split('#')[0] === hrefWithoutAnchor)
 }
 
-const findCoverId = (epub: EPub): string | undefined => {
+const findCoverId = (epub: EpubArchive): string | undefined => {
   const metadataCover = stringFromUnknown((epub.metadata as EpubMetadataSource).cover)
 
   if (metadataCover && epub.manifest[metadataCover] && isImageManifestItem(epub.manifest[metadataCover])) {
@@ -575,42 +775,44 @@ const findCoverId = (epub: EPub): string | undefined => {
   return propertyCover?.id
 }
 
-const collectImageAssets = async (epub: EPub): Promise<EpubAssetReference[]> => {
+const collectImageAssets = async (epub: EpubArchive): Promise<EpubAssetReference[]> => {
   const coverId = findCoverId(epub)
   const imageItems = Object.values(epub.manifest).filter(isImageManifestItem)
+  const assets: EpubAssetReference[] = []
 
-  return Promise.all(
-    imageItems.map(async (item) => {
-      const kind: EpubImageKind = item.id === coverId ? 'cover' : 'image'
-      const baseReference: EpubAssetReference = {
-        id: item.id,
-        href: item.href,
-        mimeType: item['media-type'],
-        kind
-      }
+  // Inflate images sequentially so several compressed assets cannot peak in memory together.
+  for (const item of imageItems) {
+    const kind: EpubImageKind = item.id === coverId ? 'cover' : 'image'
+    const baseReference: EpubAssetReference = {
+      id: item.id,
+      href: item.href,
+      mimeType: item['media-type'],
+      kind
+    }
 
-      try {
-        const image = await epub.getImage(item.id)
-        return {
-          ...baseReference,
-          data: image.data,
-          mimeType: image.mimeType,
-          src: `data:${image.mimeType};base64,${image.data.toString('base64')}`
-        }
-      } catch (error) {
-        return {
-          ...baseReference,
-          error: error instanceof Error ? error.message : String(error)
-        }
-      }
-    })
-  )
+    try {
+      const image = await epub.getImage(item.id)
+      assets.push({
+        ...baseReference,
+        data: image.data,
+        mimeType: image.mimeType,
+        src: `data:${image.mimeType};base64,${bytesToBase64(image.data)}`
+      })
+    } catch (error) {
+      assets.push({
+        ...baseReference,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  return assets
 }
 
 const findPageIdForTocItem = (
-  tocItem: TocElement,
+  tocItem: EpubTocElement,
   pageIdByManifestId: Map<string, string>,
-  manifest: Record<string, ManifestItem>
+  manifest: Record<string, EpubManifestItem>
 ): string | undefined => {
   if (pageIdByManifestId.has(tocItem.id)) {
     return pageIdByManifestId.get(tocItem.id)
@@ -621,9 +823,9 @@ const findPageIdForTocItem = (
 }
 
 const buildOutline = (
-  toc: TocElement[],
+  toc: EpubTocElement[],
   pageIdByManifestId: Map<string, string>,
-  manifest: Record<string, ManifestItem>
+  manifest: Record<string, EpubManifestItem>
 ): IntermediateOutline[] | undefined => {
   const outline = toc
     .filter((item) => item.title?.trim())
@@ -664,7 +866,7 @@ const buildOutline = (
   return outline.length > 0 ? outline : undefined
 }
 
-const readChapterHtml = async (epub: EPub, chapterId: string): Promise<string> => {
+const readChapterHtml = async (epub: EpubArchive, chapterId: string): Promise<string> => {
   try {
     return await epub.getChapter(chapterId)
   } catch (firstError) {
@@ -682,20 +884,20 @@ export class EpubParser extends DocumentParser {
   static readonly exts = ['epub'] as const
   static readonly ext = 'epub'
 
-  async encode(input: ParserInput): Promise<IntermediateDocument> {
+  async encode(input: EpubParserInput): Promise<IntermediateDocument> {
     const doc = await EpubParser.encode(input)
     return doc.getIntermediateDocument()
   }
 
   async decode(
     intermediateDocument: IntermediateDocument
-  ): Promise<ParserInput> {
+  ): Promise<Uint8Array> {
     return EpubParser.decode(intermediateDocument)
   }
 
   static async encode(fileOrBuffer: EpubParserInput): Promise<EpubDocument> {
     const normalizedInput = await normalizeInput(fileOrBuffer)
-    const epub = new EPub(toEpubConstructorInput(normalizedInput))
+    const epub = new EpubArchive(normalizedInput)
 
     try {
       await epub.parse()
@@ -704,46 +906,90 @@ export class EpubParser extends DocumentParser {
       throw new Error(`Failed to parse EPUB: ${message}`)
     }
 
-    const id = `epub-${Date.now()}`
+    const id = makeStableDocumentId(epub.metadata as EpubMetadataSource, normalizedInput)
     const metadata = extractEpubMetadata(epub.metadata as EpubMetadataSource)
     const imageAssets = await collectImageAssets(epub)
     const assetById = new Map(imageAssets.map((asset) => [asset.id, asset]))
     const pageIdByManifestId = new Map<string, string>()
 
     const contentFlow = epub.flow.filter((flowItem) => !isNavigationManifestItem(flowItem))
-    const infoList = await Promise.all(
-      contentFlow.map(async (flowItem, index) => {
-        const pageNumber = index + 1
-        const pageId = `${id}-page-${pageNumber}`
-        pageIdByManifestId.set(flowItem.id, pageId)
-
-        const html = await readChapterHtml(epub, flowItem.id)
-        const texts = htmlToTexts(html, pageId)
-        const chapterImageIds = extractChapterImageIds(html)
-        const images = createPageImages(
-          chapterImageIds,
-          assetById,
-          pageId,
-          PAGE_MARGIN_Y + Math.max(1, texts.length) * LINE_HEIGHT + LINE_HEIGHT
-        )
-        const pageHeight = getPageHeight(texts.length, images.length)
-
-        return {
-          id: pageId,
-          pageNumber,
-          size: { x: PAGE_WIDTH, y: pageHeight },
-          getData: async () =>
-            new IntermediatePage({
-              id: pageId,
-              number: pageNumber,
-              width: PAGE_WIDTH,
-              height: pageHeight,
-              content: [...texts, ...images],
-              thumbnail: undefined
-            })
-        }
+    const firstFlowItem = contentFlow[0]
+    const firstChapterHtml = firstFlowItem
+      ? await readChapterHtml(epub, firstFlowItem.id)
+      : undefined
+    const coverAsset = imageAssets.find((asset) => asset.kind === 'cover')
+    const coverSrc = coverAsset ? dataUrlFromAsset(coverAsset) : undefined
+    const firstChapterImageIds = firstChapterHtml ? extractChapterImageIds(firstChapterHtml) : []
+    const coverIsFirstSpinePage = coverSrc
+      ? firstChapterImageIds.some((imageId) => {
+          const chapterAsset = assetById.get(imageId)
+          return chapterAsset ? dataUrlFromAsset(chapterAsset) === coverSrc : false
+        })
+      : false
+    const infoList = []
+    if (coverSrc && !coverIsFirstSpinePage) {
+      const pageId = `${id}-page-1`
+      const coverImage = new IntermediateImage({
+        id: `${pageId}-image-1`,
+        src: coverSrc,
+        polygon: textPolygon(PAGE_MARGIN_X, PAGE_MARGIN_Y, 720, 920),
+        opacity: 1
       })
-    )
+
+      infoList.push({
+        id: pageId,
+        pageNumber: 1,
+        size: { x: PAGE_WIDTH, y: 1000 },
+        getData: async () =>
+          new IntermediatePage({
+            id: pageId,
+            number: 1,
+            width: PAGE_WIDTH,
+            height: 1000,
+            content: [coverImage],
+            thumbnail: undefined,
+            useFlowLayout: true
+          })
+      })
+    }
+
+    const pageNumberOffset = infoList.length
+    for (const [index, flowItem] of contentFlow.entries()) {
+      const pageNumber = index + pageNumberOffset + 1
+      const pageId = `${id}-page-${pageNumber}`
+      pageIdByManifestId.set(flowItem.id, pageId)
+
+      const html = index === 0 && firstChapterHtml !== undefined
+        ? firstChapterHtml
+        : await readChapterHtml(epub, flowItem.id)
+      const texts = htmlToTexts(html, pageId)
+      const chapterImageIds = extractChapterImageIds(html)
+      // 文本块实际高度随各行行高变化（标题更高），图片与页面高度都以此为准
+      const textBlockHeight = Math.max(sumTextBlockHeight(texts), LINE_HEIGHT)
+      const images = createPageImages(
+        chapterImageIds,
+        assetById,
+        pageId,
+        PAGE_MARGIN_Y + textBlockHeight + LINE_HEIGHT
+      )
+      const pageHeight = getPageHeight(texts.length, images.length, textBlockHeight)
+
+      infoList.push({
+        id: pageId,
+        pageNumber,
+        size: { x: PAGE_WIDTH, y: pageHeight },
+        getData: async () =>
+          new IntermediatePage({
+            id: pageId,
+            number: pageNumber,
+            width: PAGE_WIDTH,
+            height: pageHeight,
+            content: [...texts, ...images],
+            thumbnail: undefined,
+            useFlowLayout: true
+          })
+      })
+    }
 
     const outline = buildOutline(epub.toc, pageIdByManifestId, epub.manifest)
 
@@ -758,12 +1004,12 @@ export class EpubParser extends DocumentParser {
     documentWithEpubData.metadata = metadata
     documentWithEpubData.epubMetadata = metadata
     documentWithEpubData.epubImages = imageAssets
-    documentWithEpubData.epubCover = imageAssets.find((asset) => asset.kind === 'cover')
+    documentWithEpubData.epubCover = coverAsset
     documentWithEpubData.epubTocItems = epub.toc
 
     if (!outline && epub.toc.length === 0) {
       documentWithEpubData.epubTocMappingLimitation =
-        'The epub package did not expose NCX TOC items for this EPUB.'
+        'The EPUB did not expose NCX or EPUB 3 navigation TOC items.'
     }
 
     return new EpubDocument(intermediateDocument)
@@ -771,7 +1017,7 @@ export class EpubParser extends DocumentParser {
 
   static async decode(
     intermediateDocument: IntermediateDocument
-  ): Promise<ParserInput> {
+  ): Promise<Uint8Array> {
     if (!(intermediateDocument instanceof IntermediateDocument)) {
       throw invalidIntermediateError('document must be an IntermediateDocument')
     }
@@ -783,37 +1029,34 @@ export class EpubParser extends DocumentParser {
     if (!pages.length) throw invalidIntermediateError('at least one page is required')
 
     const documentRecord = intermediateDocument as unknown as Record<string, unknown>
-    const options: Options = {
+    const author = getMetadataStringOrArrayFromDocument(documentRecord, [
+      'author',
+      'creator',
+      'creators',
+      'creatorFileAs'
+    ])
+    const publisher = getMetadataStringFromDocument(documentRecord, ['publisher'])
+    const date = getMetadataStringFromDocument(documentRecord, ['date', 'published', 'modified'])
+    const lang = getMetadataStringFromDocument(documentRecord, ['language', 'lang'])
+    const cover = await resolveDecodeCover(intermediateDocument)
+    const options: EpubGeneratorOptions = {
       title,
-      author: getMetadataStringOrArrayFromDocument(documentRecord, [
-        'author',
-        'creator',
-        'creators',
-        'creatorFileAs'
-      ]),
-      publisher: getMetadataStringFromDocument(documentRecord, ['publisher']),
-      date: getMetadataStringFromDocument(documentRecord, ['date', 'published', 'modified']),
-      lang: getMetadataStringFromDocument(documentRecord, ['language', 'lang']),
-      cover: await resolveDecodeCover(intermediateDocument),
-      verbose: false,
-      prependChapterTitles: false,
-      ignoreFailedDownloads: true
+      identifier: intermediateDocument.id,
+      ...(author ? { author } : {}),
+      ...(publisher ? { publisher } : {}),
+      ...(date ? { date } : {}),
+      ...(lang ? { lang } : {}),
+      ...(cover ? { cover } : {})
     }
 
-    const cleanupTasks: DecodeCleanupTask[] = []
-
-    try {
-      const content: Content = await Promise.all(
+    const content: EpubContentItem[] = await Promise.all(
         [...pages]
           .sort((a, b) => a.number - b.number)
           .map(async (page, index) => {
             const pageContent = await page.getContent()
             const texts = pageContent.filter(isIntermediateTextContent)
             const images = pageContent.filter(isIntermediateImageContent)
-            const html = `${renderTextParagraphs(texts)}${await renderImageParagraphs(
-              images,
-              cleanupTasks
-            )}`
+            const html = `${renderTextParagraphs(texts)}${await renderImageParagraphs(images)}`
 
             return {
               title: makePageTitle(page, index),
@@ -821,15 +1064,12 @@ export class EpubParser extends DocumentParser {
               excludeFromToc: false
             }
           })
-      )
+    )
 
-      const output = await normalizeGeneratedOutput(await generateEpub(options, content, 3))
-      assertZipMagic(output)
+    const output = await normalizeGeneratedOutput(await generateEpub(options, content))
+    assertZipMagic(output)
 
-      return output
-    } finally {
-      await Promise.all(cleanupTasks.map((cleanup) => cleanup()))
-    }
+    return output
   }
 }
 
@@ -837,7 +1077,7 @@ export async function normalizeInput(
   input: EpubParserInput
 ): Promise<NormalizedEpubInput> {
   if (isNodeBuffer(input)) {
-    return input
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength).slice()
   }
 
   if (isArrayBuffer(input)) {

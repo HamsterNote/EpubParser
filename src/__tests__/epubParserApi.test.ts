@@ -49,7 +49,7 @@ describe('EpubParser API shell', () => {
     const output = await parser.decode(doc)
 
     // EPUB 本质是 ZIP 文件，必须以 PK\x03\x04 开头
-    const bytes = Buffer.from(output as ArrayBuffer)
+    const bytes = Buffer.from(output)
     expect(bytes[0]).toBe(0x50) // P
     expect(bytes[1]).toBe(0x4b) // K
     expect(bytes[2]).toBe(0x03) // \x03

@@ -63,7 +63,8 @@ const makeIntermediateDocument = (): IntermediateDocument => {
     width: 800,
     height: 1000,
     content: [makeText('Integration smoke page.')],
-    thumbnail: undefined
+    thumbnail: undefined,
+    useFlowLayout: true
   })
 
   const document = new IntermediateDocument({
@@ -107,6 +108,7 @@ describe('EpubParser integration', () => {
     expect(intermediate.title).toBe('Minimal Test Book')
     expect(pages.length).toBeGreaterThan(0)
     expect(pages[0]).toBeInstanceOf(IntermediatePage)
+    expect(pages.every((page) => page.useFlowLayout === true)).toBe(true)
   })
 
   it('decodes a synthetic intermediate document into ZIP-backed EPUB bytes', async () => {
@@ -132,5 +134,6 @@ describe('EpubParser integration', () => {
     await expectZipMagic(generated)
     expect(reparsed.getIntermediateDocument().title).toBe('Minimal Test Book')
     expect(reparsedPages.length).toBeGreaterThan(0)
+    expect(reparsedPages.every((page) => page.useFlowLayout === true)).toBe(true)
   })
 })
