@@ -28,3 +28,8 @@ Observed result:
 ```text
 QA PASS: public encode decoded %20 chapter path; public decode embedded octet-stream PNG as image/png
 ```
+
+## Release metadata follow-up
+
+- The already-published `0.3.0-beta.3` package contains the cover-page feature and both review fixes, so its changelog entry now records that actual content.
+- The immutable follow-up release is `0.3.0-beta.4`; its package version, release branch, Git tag, npm `gitHead`, and changelog are verified against one commit after publication.
