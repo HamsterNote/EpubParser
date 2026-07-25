@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IntermediateDocument } from '@hamster-note/types'
-import { EpubParser, type EpubDocumentExtensions } from '../index'
+import { type EpubDocumentExtensions, EpubParser } from '../index'
 
 // 页面内容里文本项的结构子集（避免依赖 IntermediateText 具体类形态）
 type PageText = { content: string; fontSize: number; fontWeight: number; italic: boolean; lineHeight: number; polygon: number[][] }
@@ -78,16 +78,25 @@ describe('EpubParser.encode', () => {
     expect(imageContentCount).toBeGreaterThanOrEqual(1)
   })
 
-  it('exposes cover data when the dependency can identify it', async () => {
+  it('creates the first IntermediatePage from an independent cover image', async () => {
+    // Given: 封面是 manifest 中的 cover-image，但不在 EPUB spine 中
     const doc = await encodeFixture('with-cover.epub')
 
-    if (doc.epubCover) {
-      expect(doc.epubCover.kind).toBe('cover')
-      expect(doc.epubCover.mimeType).toMatch(/^image\//)
-      expect(doc.epubCover.src ?? doc.epubCover.error).toBeDefined()
-    } else {
-      expect(doc.epubImages?.length ?? 0).toBeGreaterThanOrEqual(0)
-    }
+    // When: 通过 IntermediateDocument 页面接口读取解析结果
+    const pages = await doc.pages
+
+    // Then: 封面独占第一页，原正文顺延到第二页
+    expect(doc.epubCover?.kind).toBe('cover')
+    expect(doc.epubCover?.mimeType).toMatch(/^image\//)
+    expect(doc.pageCount).toBe(2)
+    expect(pages).toHaveLength(2)
+    expect(pages[0].number).toBe(1)
+    expect(pages[0].content).toHaveLength(1)
+    expect(pages[0].content[0]).toMatchObject({ src: doc.epubCover?.src })
+    expect(pages[1].number).toBe(2)
+    expect(pageTexts(pages[1].content as unknown[]).map((text) => text.content)).toContain(
+      'This book has a cover image.'
+    )
   })
 
   it('maps headings, footnotes and inline emphasis to distinct text styles', async () => {

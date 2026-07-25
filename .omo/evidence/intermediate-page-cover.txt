@@ -1,0 +1,29 @@
+IntermediatePage cover verification
+Date: 2026-07-23
+
+Scenario: Parse with-cover.epub through the built package public API.
+Command: node --input-type=module -e "import { EpubParser } from './dist/index.js'; ..."
+Observed:
+{
+  "pageCount": 2,
+  "pageNumbers": [1, 2],
+  "firstPageImageCount": 1,
+  "firstPageCoverMatches": true,
+  "secondPageTexts": ["This book has a cover image."]
+}
+Result: PASS. The independent cover image is the only content on IntermediatePage 1, and spine content starts on page 2.
+
+Regression scenario: Parse minimal.epub, which has no cover.
+Observed:
+{
+  "pageCount": 1,
+  "pageNumbers": [1],
+  "firstPageImageCount": 0,
+  "firstPageTexts": ["This is the only chapter in the minimal EPUB fixture."]
+}
+Result: PASS. EPUBs without a cover retain their original page layout.
+
+Automated gates:
+- yarn typecheck: PASS
+- yarn test --runInBand: PASS, 9 suites / 58 tests
+- yarn build:all: PASS

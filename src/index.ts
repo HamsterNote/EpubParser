@@ -2,8 +2,8 @@ import { DocumentParser, type ParserInput } from '@hamster-note/document-parser'
 import {
   IntermediateDocument,
   IntermediateImage,
-  type IntermediateOutlineDest,
   IntermediateOutline,
+  type IntermediateOutlineDest,
   IntermediateOutlineDestType,
   IntermediatePage,
   IntermediatePageMap,
@@ -12,15 +12,15 @@ import {
 } from '@hamster-note/types'
 import { EpubArchive } from './EpubArchive.js'
 import type { EpubManifestItem, EpubTocElement } from './EpubArchiveTypes.js'
-import {
-  generateEpub,
-  type EpubContentItem,
-  type EpubGeneratorOptions
-} from './EpubGenerator.js'
 import { EpubDocument } from './EpubDocument.js'
+import {
+  type EpubContentItem,
+  type EpubGeneratorOptions,
+  generateEpub
+} from './EpubGenerator.js'
 
 export { EpubDocument } from './EpubDocument.js'
-export { EpubPage, RenderViews, type RenderOptions } from './EpubPage.js'
+export { EpubPage, type RenderOptions, RenderViews } from './EpubPage.js'
 
 type BrowserBinaryInput = ArrayBuffer | Uint8Array | File | Blob
 type NodeBinaryInput = string
@@ -912,40 +912,82 @@ export class EpubParser extends DocumentParser {
     const pageIdByManifestId = new Map<string, string>()
 
     const contentFlow = epub.flow.filter((flowItem) => !isNavigationManifestItem(flowItem))
-    const infoList = []
-    for (const [index, flowItem] of contentFlow.entries()) {
-        const pageNumber = index + 1
-        const pageId = `${id}-page-${pageNumber}`
-        pageIdByManifestId.set(flowItem.id, pageId)
-
-        const html = await readChapterHtml(epub, flowItem.id)
-        const texts = htmlToTexts(html, pageId)
-        const chapterImageIds = extractChapterImageIds(html)
-        // 文本块实际高度随各行行高变化（标题更高），图片与页面高度都以此为准
-        const textBlockHeight = Math.max(sumTextBlockHeight(texts), LINE_HEIGHT)
-        const images = createPageImages(
-          chapterImageIds,
-          assetById,
-          pageId,
-          PAGE_MARGIN_Y + textBlockHeight + LINE_HEIGHT
-        )
-        const pageHeight = getPageHeight(texts.length, images.length, textBlockHeight)
-
-        infoList.push({
-          id: pageId,
-          pageNumber,
-          size: { x: PAGE_WIDTH, y: pageHeight },
-          getData: async () =>
-            new IntermediatePage({
-              id: pageId,
-              number: pageNumber,
-              width: PAGE_WIDTH,
-              height: pageHeight,
-              content: [...texts, ...images],
-              thumbnail: undefined,
-              useFlowLayout: true
-            })
+    const firstFlowItem = contentFlow[0]
+    const firstChapterHtml = firstFlowItem
+      ? await readChapterHtml(epub, firstFlowItem.id)
+      : undefined
+    const coverAsset = imageAssets.find((asset) => asset.kind === 'cover')
+    const coverSrc = coverAsset ? dataUrlFromAsset(coverAsset) : undefined
+    const firstChapterImageIds = firstChapterHtml ? extractChapterImageIds(firstChapterHtml) : []
+    const coverIsFirstSpinePage = coverSrc
+      ? firstChapterImageIds.some((imageId) => {
+          const chapterAsset = assetById.get(imageId)
+          return chapterAsset ? dataUrlFromAsset(chapterAsset) === coverSrc : false
         })
+      : false
+    const infoList = []
+    if (coverSrc && !coverIsFirstSpinePage) {
+      const pageId = `${id}-page-1`
+      const coverImage = new IntermediateImage({
+        id: `${pageId}-image-1`,
+        src: coverSrc,
+        polygon: textPolygon(PAGE_MARGIN_X, PAGE_MARGIN_Y, 720, 920),
+        opacity: 1
+      })
+
+      infoList.push({
+        id: pageId,
+        pageNumber: 1,
+        size: { x: PAGE_WIDTH, y: 1000 },
+        getData: async () =>
+          new IntermediatePage({
+            id: pageId,
+            number: 1,
+            width: PAGE_WIDTH,
+            height: 1000,
+            content: [coverImage],
+            thumbnail: undefined,
+            useFlowLayout: true
+          })
+      })
+    }
+
+    const pageNumberOffset = infoList.length
+    for (const [index, flowItem] of contentFlow.entries()) {
+      const pageNumber = index + pageNumberOffset + 1
+      const pageId = `${id}-page-${pageNumber}`
+      pageIdByManifestId.set(flowItem.id, pageId)
+
+      const html = index === 0 && firstChapterHtml !== undefined
+        ? firstChapterHtml
+        : await readChapterHtml(epub, flowItem.id)
+      const texts = htmlToTexts(html, pageId)
+      const chapterImageIds = extractChapterImageIds(html)
+      // 文本块实际高度随各行行高变化（标题更高），图片与页面高度都以此为准
+      const textBlockHeight = Math.max(sumTextBlockHeight(texts), LINE_HEIGHT)
+      const images = createPageImages(
+        chapterImageIds,
+        assetById,
+        pageId,
+        PAGE_MARGIN_Y + textBlockHeight + LINE_HEIGHT
+      )
+      const pageHeight = getPageHeight(texts.length, images.length, textBlockHeight)
+
+      infoList.push({
+        id: pageId,
+        pageNumber,
+        size: { x: PAGE_WIDTH, y: pageHeight },
+        getData: async () =>
+          new IntermediatePage({
+            id: pageId,
+            number: pageNumber,
+            width: PAGE_WIDTH,
+            height: pageHeight,
+            content: [...texts, ...images],
+            thumbnail: undefined,
+            useFlowLayout: true
+          })
+      })
     }
 
     const outline = buildOutline(epub.toc, pageIdByManifestId, epub.manifest)
@@ -961,7 +1003,7 @@ export class EpubParser extends DocumentParser {
     documentWithEpubData.metadata = metadata
     documentWithEpubData.epubMetadata = metadata
     documentWithEpubData.epubImages = imageAssets
-    documentWithEpubData.epubCover = imageAssets.find((asset) => asset.kind === 'cover')
+    documentWithEpubData.epubCover = coverAsset
     documentWithEpubData.epubTocItems = epub.toc
 
     if (!outline && epub.toc.length === 0) {
