@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-25
+
+### Changed
+- First formal stable release after beta series
+- Regenerate EPUB test fixtures to align with updated parser behavior
+
+### Added
+- Cross-platform EPUB archive reader and generator using `jszip`
+- EPUB XML parsing with `@likecoin/epub-ts` for metadata, spine, and navigation
+- Render independent cover image as first `IntermediatePage`
+- Support `IntermediatePage.useFlowLayout` field
+- Security preflight check in `EpubResourceReader` for forged ZIP metadata
+
+### Dependencies
+- `@likecoin/epub-ts@0.6.9` for EPUB structure parsing
+- `linkedom@0.18.13` for Node.js DOM implementation
+- `jszip@3.10.1` for cross-platform ZIP I/O
+- `@hamster-note/types@0.11.0-beta.1` (adds `useFlowLayout` support)
+
 ## [0.4.0-beta] - 2026-07-25
 
 ### Changed
