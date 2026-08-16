@@ -1,5 +1,6 @@
 import { DocumentParser, type ParserInput } from '@hamster-note/document-parser'
 import {
+  type IntermediateContent,
   IntermediateDocument,
   IntermediateImage,
   IntermediateOutline,
@@ -655,18 +656,6 @@ const htmlToTexts = (html: string, pageId: string): IntermediateText[] => {
   return texts
 }
 
-const getPageHeight = (contentCount: number, imageCount = 0, textBlockHeight?: number): number => {
-  // textBlockHeight 为各行 lineHeight 的实际总和；缺省时回退到旧的等距估算
-  const textHeight =
-    PAGE_MARGIN_Y * 2 + (textBlockHeight ?? Math.max(1, contentCount) * LINE_HEIGHT)
-  const imageHeight = imageCount * 220
-  return Math.max(1000, textHeight + imageHeight)
-}
-
-/** 文本块实际占用高度（各行 lineHeight 之和，供页面高度与图片起始位置使用） */
-const sumTextBlockHeight = (texts: IntermediateText[]): number =>
-  texts.reduce((sum, text) => sum + text.lineHeight, 0)
-
 const dataUrlFromAsset = (asset: EpubAssetReference): string | undefined => {
   if (!asset.data || !asset.mimeType) {
     return asset.src
@@ -675,46 +664,111 @@ const dataUrlFromAsset = (asset: EpubAssetReference): string | undefined => {
   return `data:${asset.mimeType};base64,${bytesToBase64(asset.data)}`
 }
 
-const extractChapterImageIds = (html: string): string[] => {
-  const imageIds = new Set<string>()
-  const srcPattern = /<img\b[^>]*\bsrc\s*=\s*(["']?)([^"'\s>]+)\1/gi
+type ChapterImagePlacement = {
+  imageId: string
+  textIndex: number
+}
 
-  for (let match = srcPattern.exec(html); match !== null; match = srcPattern.exec(html)) {
-    const src = match[2]
+type ChapterImageContent = {
+  image: IntermediateImage
+  textIndex: number
+}
+
+type ChapterContentSource = {
+  html: string
+  imagePlacements: ChapterImagePlacement[]
+}
+
+const extractChapterContentSource = (html: string): ChapterContentSource => {
+  const placements: ChapterImagePlacement[] = []
+  const imagePattern = /<img\b(?:[^<>"']|"[^"]*"|'[^']*')*>/gi
+  const srcPattern = /(?:^|\s)src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i
+  let htmlWithoutImages = ''
+  let precedingEnd = 0
+
+  for (let match = imagePattern.exec(html); match !== null; match = imagePattern.exec(html)) {
+    htmlWithoutImages += html.slice(precedingEnd, match.index)
+    const srcMatch = srcPattern.exec(match[0])
+    const src = srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? ''
     const rewrittenId = src.match(/\/images\/([^/]+)\//)?.[1]
 
     if (rewrittenId) {
-      imageIds.add(decodeURIComponent(rewrittenId))
+      placements.push({
+        imageId: rewrittenId,
+        textIndex: htmlToStyledTextLines(htmlWithoutImages).length
+      })
+      htmlWithoutImages += '\n'
+    } else {
+      htmlWithoutImages += match[0]
     }
+    precedingEnd = imagePattern.lastIndex
   }
 
-  return [...imageIds]
+  return {
+    html: htmlWithoutImages + html.slice(precedingEnd),
+    imagePlacements: placements
+  }
 }
 
 const createPageImages = (
-  imageIds: string[],
+  placements: ChapterImagePlacement[],
   assetById: Map<string, EpubAssetReference>,
-  pageId: string,
-  startY: number
-): IntermediateImage[] => {
-  return imageIds.flatMap((imageId, index) => {
-    const asset = assetById.get(imageId)
+  pageId: string
+): ChapterImageContent[] => {
+  return placements.flatMap((placement, index) => {
+    const asset = assetById.get(placement.imageId)
     const src = asset ? dataUrlFromAsset(asset) : undefined
 
     if (!src) {
       return []
     }
 
-    const y = startY + index * 220
     return [
-      new IntermediateImage({
-        id: `${pageId}-image-${index + 1}`,
-        src,
-        polygon: textPolygon(PAGE_MARGIN_X, y, 240, 180),
-        opacity: 1
-      })
+      {
+        image: new IntermediateImage({
+          id: `${pageId}-image-${index + 1}`,
+          src,
+          polygon: textPolygon(PAGE_MARGIN_X, PAGE_MARGIN_Y, 240, 180),
+          opacity: 1
+        }),
+        textIndex: placement.textIndex
+      }
     ]
   })
+}
+
+const orderChapterContent = (
+  texts: IntermediateText[],
+  images: ChapterImageContent[]
+): IntermediateContent[] => {
+  const imagesByTextIndex = new Map<number, IntermediateImage[]>()
+
+  images.forEach(({ image, textIndex: placementTextIndex }) => {
+    const textIndex = Math.min(placementTextIndex, texts.length)
+    const imagesAtIndex = imagesByTextIndex.get(textIndex) ?? []
+    imagesAtIndex.push(image)
+    imagesByTextIndex.set(textIndex, imagesAtIndex)
+  })
+
+  const content: IntermediateContent[] = []
+  texts.forEach((text, index) => {
+    content.push(...(imagesByTextIndex.get(index) ?? []), text)
+  })
+  content.push(...(imagesByTextIndex.get(texts.length) ?? []))
+  return content
+}
+
+const layoutChapterContent = (content: IntermediateContent[]): number => {
+  let y = PAGE_MARGIN_Y
+
+  content.forEach((item) => {
+    const width = item.polygon[1][0] - item.polygon[0][0]
+    const height = item instanceof IntermediateImage ? 180 : item.lineHeight
+    item.polygon = textPolygon(PAGE_MARGIN_X, y, width, height)
+    y += height + (item instanceof IntermediateImage ? 40 : 0)
+  })
+
+  return Math.max(1000, y + PAGE_MARGIN_Y)
 }
 
 const isImageManifestItem = (item: EpubManifestItem): boolean => {
@@ -919,7 +973,9 @@ export class EpubParser extends DocumentParser {
       : undefined
     const coverAsset = imageAssets.find((asset) => asset.kind === 'cover')
     const coverSrc = coverAsset ? dataUrlFromAsset(coverAsset) : undefined
-    const firstChapterImageIds = firstChapterHtml ? extractChapterImageIds(firstChapterHtml) : []
+    const firstChapterImageIds = firstChapterHtml
+      ? extractChapterContentSource(firstChapterHtml).imagePlacements.map(({ imageId }) => imageId)
+      : []
     const coverIsFirstSpinePage = coverSrc
       ? firstChapterImageIds.some((imageId) => {
           const chapterAsset = assetById.get(imageId)
@@ -962,17 +1018,15 @@ export class EpubParser extends DocumentParser {
       const html = index === 0 && firstChapterHtml !== undefined
         ? firstChapterHtml
         : await readChapterHtml(epub, flowItem.id)
-      const texts = htmlToTexts(html, pageId)
-      const chapterImageIds = extractChapterImageIds(html)
-      // 文本块实际高度随各行行高变化（标题更高），图片与页面高度都以此为准
-      const textBlockHeight = Math.max(sumTextBlockHeight(texts), LINE_HEIGHT)
+      const chapterSource = extractChapterContentSource(html)
+      const texts = htmlToTexts(chapterSource.html, pageId)
       const images = createPageImages(
-        chapterImageIds,
+        chapterSource.imagePlacements,
         assetById,
-        pageId,
-        PAGE_MARGIN_Y + textBlockHeight + LINE_HEIGHT
+        pageId
       )
-      const pageHeight = getPageHeight(texts.length, images.length, textBlockHeight)
+      const content = orderChapterContent(texts, images)
+      const pageHeight = layoutChapterContent(content)
 
       infoList.push({
         id: pageId,
@@ -984,7 +1038,7 @@ export class EpubParser extends DocumentParser {
             number: pageNumber,
             width: PAGE_WIDTH,
             height: pageHeight,
-            content: [...texts, ...images],
+            content,
             thumbnail: undefined,
             useFlowLayout: true
           })

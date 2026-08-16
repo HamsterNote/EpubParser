@@ -1,6 +1,8 @@
+import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IntermediateDocument } from '@hamster-note/types'
+import JSZip from 'jszip'
 import { type EpubDocumentExtensions, EpubParser } from '../index'
 
 // 页面内容里文本项的结构子集（避免依赖 IntermediateText 具体类形态）
@@ -20,6 +22,25 @@ type DocumentWithEpubData = IntermediateDocument & Partial<EpubDocumentExtension
 const encodeFixture = async (name: string): Promise<DocumentWithEpubData> => {
   const epubDocument = await EpubParser.encode(fixturePath(name))
   return epubDocument.getIntermediateDocument() as DocumentWithEpubData
+}
+
+const makeInlineImageEpub = async (): Promise<Uint8Array> => {
+  const zip = new JSZip()
+  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' })
+  zip.file(
+    'META-INF/container.xml',
+    '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+  )
+  zip.file(
+    'EPUB/package.opf',
+    '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">inline-image-order</dc:identifier><dc:title>Inline Image Order</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2024-01-15T00:00:00Z</meta></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="marker" href="marker.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+  )
+  zip.file(
+    'EPUB/chapter.xhtml',
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title></head><body><p>Before inline image. <img src="marker.png" data-src="placeholder.png" alt="first > marker"/> Between inline images.</p><img src="marker.png" alt="second marker"/><p>After inline image.</p></body></html>'
+  )
+  zip.file('EPUB/marker.png', await readFile(fixturePath('red.png')))
+  return zip.generateAsync({ type: 'uint8array' })
 }
 
 describe('EpubParser.encode', () => {
@@ -76,6 +97,28 @@ describe('EpubParser.encode', () => {
     expect(doc.epubImages?.[0]?.mimeType).toMatch(/^image\//)
     expect(doc.epubImages?.[0]?.src ?? doc.epubImages?.[0]?.error).toBeDefined()
     expect(imageContentCount).toBeGreaterThanOrEqual(1)
+  })
+
+  it('preserves every inline image occurrence and its page geometry', async () => {
+    // Given: 同一图片资源在段落内部与段落之间各出现一次
+    const epub = await makeInlineImageEpub()
+
+    // When: parser 将 EPUB 转换成 IntermediatePage
+    const parsed = await EpubParser.encode(epub)
+    const pages = await parsed.getIntermediateDocument().pages
+
+    // Then: 每次 DOM occurrence 都必须保留，且几何坐标与内容顺序一致
+    const content = pages[0].content
+    expect(content.map((item) => ('src' in item ? 'image' : item.content))).toEqual([
+      'Before inline image.',
+      'image',
+      'Between inline images.',
+      'image',
+      'After inline image.'
+    ])
+    expect(content.map((item) => item.polygon[0][1])).toEqual(
+      [...content.map((item) => item.polygon[0][1])].sort((left, right) => left - right)
+    )
   })
 
   it('creates the first IntermediatePage from an independent cover image', async () => {
