@@ -6,7 +6,16 @@ import JSZip from 'jszip'
 import { type EpubDocumentExtensions, EpubParser } from '../index'
 
 // 页面内容里文本项的结构子集（避免依赖 IntermediateText 具体类形态）
-type PageText = { content: string; fontSize: number; fontWeight: number; italic: boolean; lineHeight: number; polygon: number[][] }
+type PageText = {
+  id: string
+  content: string
+  fontSize: number
+  fontFamily: string
+  fontWeight: number
+  italic: boolean
+  lineHeight: number
+  polygon: number[][]
+}
 
 const pageTexts = (content: unknown[]): PageText[] =>
   content.filter(
@@ -40,6 +49,47 @@ const makeInlineImageEpub = async (): Promise<Uint8Array> => {
     '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title></head><body><p>Before inline image. <img src="marker.png" data-src="placeholder.png" alt="first > marker"/> Between inline images.</p><img src="marker.png" alt="second marker"/><p>After inline image.</p></body></html>'
   )
   zip.file('EPUB/marker.png', await readFile(fixturePath('red.png')))
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+const makeStyledLayoutEpub = async (): Promise<Uint8Array> => {
+  const zip = new JSZip()
+  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' })
+  zip.file(
+    'META-INF/container.xml',
+    '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+  )
+  zip.file(
+    'EPUB/package.opf',
+    '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">styled-layout</dc:identifier><dc:title>Styled Layout</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2024-01-15T00:00:00Z</meta></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="photo" href="photo.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+  )
+  zip.file(
+    'EPUB/chapter.xhtml',
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title><style>.styled { font-size: 22px; font-family: "Literata", serif; font-weight: 600; } .right { text-align: right; } .indent { text-indent: 32px; }</style></head><body><p class="styled">Styled paragraph.</p><p class="right">Right aligned.</p><p class="indent">Indented paragraph.</p><img src="photo.png" width="1200" height="600" alt="wide photo"/></body></html>'
+  )
+  zip.file('EPUB/photo.png', await readFile(fixturePath('red.png')))
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+const makeNestedTocEpub = async (): Promise<Uint8Array> => {
+  const zip = new JSZip()
+  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' })
+  zip.file(
+    'META-INF/container.xml',
+    '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+  )
+  zip.file(
+    'EPUB/package.opf',
+    '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">nested-toc</dc:identifier><dc:title>Nested TOC</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2024-01-15T00:00:00Z</meta></metadata><manifest><item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+  )
+  zip.file(
+    'EPUB/nav.xhtml',
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol><li><a href="text/chapter.xhtml">Chapter</a><ol><li><a href="text/chapter.xhtml#target-section">Target section</a></li></ol></li><li id="chapter"><a href="https://example.com/reference">External reference</a></li></ol></nav></body></html>'
+  )
+  zip.file(
+    'EPUB/text/chapter.xhtml',
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title></head><body><h1>Chapter heading</h1><section><p>Before target.\n<span id="target-section">Target heading</span></p><p>Target body.</p></section></body></html>'
+  )
   return zip.generateAsync({ type: 'uint8array' })
 }
 
@@ -83,6 +133,37 @@ describe('EpubParser.encode', () => {
         'The epub package did not expose NCX TOC items for this EPUB.'
       )
     }
+  })
+
+  it('maps nested TOC fragments to the corresponding page text', async () => {
+    // Given: 二级目录项链接到章节内 section id，而不是只链接到章节页
+    const epub = await makeNestedTocEpub()
+
+    // When: parser 将 EPUB 导航与正文转换为 IntermediateDocument
+    const parsed = await EpubParser.encode(epub)
+    const doc = parsed.getIntermediateDocument() as DocumentWithEpubData
+    const pages = await doc.pages
+    const outline = doc.getOutline()
+
+    // Then: 目录层级被保留，fragment 使用原生 TEXT 目标指向真实正文文本
+    expect(doc.epubTocItems?.map((item) => item.level)).toEqual([0, 1, 0])
+    expect(outline?.[0].dest).toEqual({ targetType: 'page', pageId: pages[0].id })
+    expect(outline?.[1].dest.targetType).toBe('text')
+    if (outline?.[1].dest.targetType !== 'text') {
+      throw new Error('nested TOC entry did not resolve to a text destination')
+    }
+    expect(outline[1].dest.textId).toBe(
+      pageTexts(pages[0].content as unknown[]).find((text) => text.content === 'Target heading')?.id
+    )
+    expect(outline[1].dest.textId).not.toBe(
+      pageTexts(pages[0].content as unknown[]).find((text) => text.content === 'Before target.')?.id
+    )
+    expect(outline[2].dest).toEqual({
+      targetType: 'url',
+      url: 'https://example.com/reference',
+      unsafeUrl: 'https://example.com/reference',
+      newWindow: false
+    })
   })
 
   it('exposes image references and page image content when available', async () => {
@@ -197,5 +278,45 @@ describe('EpubParser.encode', () => {
       expect(text.fontWeight).toBe(400)
       expect(text.italic).toBe(false)
     })
+  })
+
+  it('maps CSS typography, paragraph alignment, indentation and image dimensions', async () => {
+    // Given: EPUB 章节通过 class CSS 描述字体、段落布局，并包含一张超出页面宽度的图片
+    const epub = await makeStyledLayoutEpub()
+
+    // When: parser 将章节转换为 IntermediatePage
+    const parsed = await EpubParser.encode(epub)
+    const pages = await parsed.getIntermediateDocument().pages
+    const page = pages[0]
+    const texts = pageTexts(page.content as unknown[])
+    const findLine = (content: string): PageText => {
+      const line = texts.find((text) => text.content === content)
+      if (!line) throw new Error(`line "${content}" not found`)
+      return line
+    }
+
+    // Then: CSS 样式映射到文本与段落，首行缩进反映为文本 x 偏移
+    expect(findLine('Styled paragraph.')).toMatchObject({
+      fontSize: 22,
+      fontFamily: 'Literata',
+      fontWeight: 600
+    })
+    const rightText = findLine('Right aligned.')
+    const rightParagraph = page.paragraphs.find((paragraph) =>
+      paragraph.textIds.includes(rightText.id)
+    )
+    expect(rightParagraph?.textAlign).toBe('right')
+    expect(rightText.polygon[1][0]).toBe(760)
+    expect(findLine('Indented paragraph.').polygon[0][0]).toBe(72)
+
+    // Then: 图片保持 2:1 比例、缩小到 720px 可用宽度并水平居中
+    const image = page.content.find((item) => 'src' in item)
+    expect(image?.polygon).toEqual([
+      [40, expect.any(Number)],
+      [760, expect.any(Number)],
+      [760, expect.any(Number)],
+      [40, expect.any(Number)]
+    ])
+    expect((image?.polygon[2][1] ?? 0) - (image?.polygon[1][1] ?? 0)).toBe(360)
   })
 })

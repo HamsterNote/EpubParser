@@ -8,6 +8,8 @@ const reEncodeResult = document.querySelector('#reEncodeResult')
 const downloadDecoded = document.querySelector('#downloadDecoded')
 const pageNumberInput = document.querySelector('#pageNumberInput')
 const showPageButton = document.querySelector('#showPageButton')
+const previewPanel = document.querySelector('#previewPanel')
+const epubPreview = document.querySelector('#epubPreview')
 
 let selectedFile
 let decodedObjectUrl
@@ -66,11 +68,29 @@ const base64ToBlob = (base64, mimeType) => {
   return new Blob([bytes], { type: mimeType })
 }
 
+const resetResults = () => {
+  previewPanel.classList.add('hidden')
+  epubPreview.replaceChildren()
+
+  for (const resultNode of [encodeResult, decodeResult, reEncodeResult]) {
+    resultNode.classList.add('empty')
+    resultNode.textContent = '尚未运行。'
+  }
+
+  downloadDecoded.classList.add('hidden')
+  downloadDecoded.removeAttribute('href')
+  if (decodedObjectUrl) URL.revokeObjectURL(decodedObjectUrl)
+  decodedObjectUrl = undefined
+}
+
 const renderResults = (result) => {
   encodeResult.classList.remove('empty')
   decodeResult.classList.remove('empty')
   reEncodeResult.classList.remove('empty')
+  previewPanel.classList.remove('hidden')
 
+  // previewHtml 由 Demo 服务端从 IntermediateDocument 安全生成。
+  epubPreview.innerHTML = result.previewHtml
   encodeResult.innerHTML = renderDocumentSummary(result.encode)
   decodeResult.innerHTML = `
     <dl class="metric-list">
@@ -90,6 +110,7 @@ const renderResults = (result) => {
 }
 
 const runRoundtrip = async (input) => {
+  resetResults()
   runSampleButton.disabled = true
   runUploadButton.disabled = true
   setStatus('正在运行 encode -> decode -> re-encode，请稍候…')
@@ -121,6 +142,7 @@ const runRoundtrip = async (input) => {
 
 fileInput.addEventListener('change', () => {
   selectedFile = fileInput.files?.[0]
+  resetResults()
   runUploadButton.disabled = !selectedFile
   setStatus(selectedFile ? `已选择：${selectedFile.name}` : '等待运行 Demo。')
 })

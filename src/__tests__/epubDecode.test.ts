@@ -179,6 +179,22 @@ describe('EpubParser.decode', () => {
     expect(embeddedImage?.byteLength).toBeGreaterThan(0)
   })
 
+  it('renders generated EPUB images centered at their intrinsic ratio with a responsive maximum width', async () => {
+    // Given: IntermediatePage 包含一张具有明确 polygon 宽高比的图片
+    const document = makeDocument([makePage(1, 'Responsive image.')])
+
+    // When: document 被生成并直接检查章节 XHTML
+    const output = await EpubParser.decode(document)
+    const zip = await JSZip.loadAsync(await zipBytes(output))
+    const chapter = await zip.file('EPUB/chapter-1.xhtml')?.async('string')
+
+    // Then: 图片段落居中，图片本身不拉伸且不会超出内容宽度
+    expect(chapter).toContain('<p style="text-align: center;">')
+    expect(chapter).toContain(
+      'style="display: block; margin: 0 auto; max-width: 100%; height: auto;"'
+    )
+  })
+
   it('infers a remote image type when the server returns a generic content type', async () => {
     // Given: a PNG URL whose server returns valid bytes as application/octet-stream.
     const imageBytes = await readFile(join(fixturesDir, 'red.png'))

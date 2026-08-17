@@ -8,6 +8,7 @@ import type {
 import { EpubResourceReader } from './EpubResourceReader.js'
 
 const resolveArchivePath = (baseFile: string, path: string): string => {
+  if (/^[a-z][a-z\d+.-]*:/i.test(path) || path.startsWith('//')) return path
   const fragmentIndex = path.indexOf('#')
   const fragment = fragmentIndex >= 0 ? path.slice(fragmentIndex) : ''
   const pathAndQuery = fragmentIndex >= 0 ? path.slice(0, fragmentIndex) : path
@@ -128,13 +129,8 @@ export class EpubArchive {
 
   async getChapter(id: string): Promise<string> {
     let html = (await this.getChapterRaw(id)).replace(/\r?\n/g, '\u0000')
-    html.replace(/<body[^>]*?>(.*)<\/body[^>]*?>/i, (_match, body: string) => {
-      html = body.trim()
-      return ''
-    })
     html = html
       .replace(/<script[^>]*?>(.*?)<\/script[^>]*?>/gi, '')
-      .replace(/<style[^>]*?>(.*?)<\/style[^>]*?>/gi, '')
       .replace(/(\s)(on\w+)(\s*=\s*["']?[^"'\s>]*?["'\s>])/g, '$1skip-$2$3')
 
     html = html.replace(
