@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url'
 import { IntermediatePage } from '@hamster-note/types'
 
 import { EpubParser } from '../dist/index.js'
+import { documentToHtml } from './documentToHtml.mjs'
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
 const demoDir = join(rootDir, 'demo')
-const sampleEpubPath = join(rootDir, 'src/__tests__/fixtures/minimal.epub')
+const sampleEpubPath = join(rootDir, 'src/__tests__/fixtures/styled-text.epub')
 const host = process.env.HOST ?? '0.0.0.0'
 const port = Number(process.env.PORT ?? 8871)
 const maxBodyBytes = 50 * 1024 * 1024
@@ -154,6 +155,7 @@ const runRoundtrip = async (inputBytes) => {
 
   return {
     encode: encodedSummary,
+    previewHtml: await documentToHtml(encodedDocument),
     decode: {
       byteLength: decodedBytes.byteLength,
       zipSignature: [...decodedBytes.subarray(0, 4)]
@@ -292,7 +294,7 @@ const server = createServer(async (request, response) => {
 
     if (
       request.method === 'GET' &&
-      ['/demo.css', '/demo.js'].includes(requestUrl.pathname)
+      ['/demo.css', '/preview.css', '/demo.js'].includes(requestUrl.pathname)
     ) {
       await serveStatic(response, requestUrl.pathname.slice(1))
       return
@@ -301,7 +303,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && requestUrl.pathname === '/sample.epub') {
       const sample = await readFile(sampleEpubPath)
       send(response, 200, sample, {
-        'content-disposition': 'attachment; filename="minimal.epub"',
+        'content-disposition': 'attachment; filename="styled-text.epub"',
         'content-type': 'application/epub+zip'
       })
       return

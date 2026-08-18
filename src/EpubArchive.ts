@@ -7,7 +7,11 @@ import type {
 } from './EpubArchiveTypes.js'
 import { EpubResourceReader } from './EpubResourceReader.js'
 
+const MAX_CHAPTER_STYLESHEETS = 32
+const MAX_CHAPTER_STYLESHEET_CHARACTERS = 2 * 1024 * 1024
+
 const resolveArchivePath = (baseFile: string, path: string): string => {
+  if (/^[a-z][a-z\d+.-]*:/i.test(path) || path.startsWith('//')) return path
   const fragmentIndex = path.indexOf('#')
   const fragment = fragmentIndex >= 0 ? path.slice(fragmentIndex) : ''
   const pathAndQuery = fragmentIndex >= 0 ? path.slice(0, fragmentIndex) : path
@@ -127,14 +131,49 @@ export class EpubArchive {
   }
 
   async getChapter(id: string): Promise<string> {
-    let html = (await this.getChapterRaw(id)).replace(/\r?\n/g, '\u0000')
-    html.replace(/<body[^>]*?>(.*)<\/body[^>]*?>/i, (_match, body: string) => {
-      html = body.trim()
-      return ''
-    })
+    let chapter = await this.getChapterRaw(id)
+    const stylesheetPattern = /<link\b[^>]*\brel\s*=\s*["'][^"']*\bstylesheet\b[^"']*["'][^>]*>/gi
+    const hrefPattern = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i
+    const stylesheetCache = new Map<string, string | undefined>()
+    const replacements: Array<{ readonly start: number; readonly end: number; readonly value: string }> = []
+    let embeddedCharacters = 0
+    let stylesheetCount = 0
+    for (const match of chapter.matchAll(stylesheetPattern)) {
+      if (match.index === undefined || stylesheetCount >= MAX_CHAPTER_STYLESHEETS) continue
+      const hrefMatch = hrefPattern.exec(match[0])
+      const href = hrefMatch?.[1] ?? hrefMatch?.[2]
+      const stylesheet = this.findManifestByResolvedHref(id, href ?? '')
+      if (stylesheet?.['media-type'].toLowerCase() !== 'text/css') continue
+
+      let css = stylesheetCache.get(stylesheet.href)
+      if (!stylesheetCache.has(stylesheet.href)) {
+        try {
+          css = await this.getResources().readText(stylesheet.href)
+        } catch {
+          // 外链 CSS 是可选增强；单个资源损坏不能阻断章节和图片的核心规范化。
+          css = undefined
+        }
+        stylesheetCache.set(stylesheet.href, css)
+      }
+      if (css === undefined || embeddedCharacters + css.length > MAX_CHAPTER_STYLESHEET_CHARACTERS) {
+        continue
+      }
+
+      embeddedCharacters += css.length
+      stylesheetCount += 1
+      replacements.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        value: `<style>${css.replace(/<\/style/gi, '<\\/style')}</style>`
+      })
+    }
+    for (const replacement of replacements.reverse()) {
+      chapter = `${chapter.slice(0, replacement.start)}${replacement.value}${chapter.slice(replacement.end)}`
+    }
+
+    let html = chapter.replace(/\r?\n/g, '\u0000')
     html = html
       .replace(/<script[^>]*?>(.*?)<\/script[^>]*?>/gi, '')
-      .replace(/<style[^>]*?>(.*?)<\/style[^>]*?>/gi, '')
       .replace(/(\s)(on\w+)(\s*=\s*["']?[^"'\s>]*?["'\s>])/g, '$1skip-$2$3')
 
     html = html.replace(

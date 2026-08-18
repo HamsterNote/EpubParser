@@ -1,5 +1,6 @@
 import { DocumentParser, type ParserInput } from '@hamster-note/document-parser'
 import {
+  type IntermediateContent,
   IntermediateDocument,
   IntermediateImage,
   IntermediateOutline,
@@ -7,17 +8,20 @@ import {
   IntermediateOutlineDestType,
   IntermediatePage,
   IntermediatePageMap,
+  type IntermediateParagraph,
   IntermediateText,
   TextDir
 } from '@hamster-note/types'
 import { EpubArchive } from './EpubArchive.js'
 import type { EpubManifestItem, EpubTocElement } from './EpubArchiveTypes.js'
+import { parseChapterText } from './EpubContentParser.js'
 import { EpubDocument } from './EpubDocument.js'
 import {
   type EpubContentItem,
   type EpubGeneratorOptions,
   generateEpub
 } from './EpubGenerator.js'
+import { readImageDimensions } from './EpubImageDimensions.js'
 
 export { EpubDocument } from './EpubDocument.js'
 export { EpubPage, type RenderOptions, RenderViews } from './EpubPage.js'
@@ -76,51 +80,12 @@ const invalidIntermediateError = (message: string) =>
 const PAGE_WIDTH = 800
 const PAGE_MARGIN_X = 40
 const PAGE_MARGIN_Y = 40
+const MIN_IMAGE_WIDTH = (PAGE_WIDTH - PAGE_MARGIN_X * 2) * 7 / 10
 const FONT_SIZE = 16
 const LINE_HEIGHT = 24
 const FONT_FAMILY = 'sans-serif'
 const TEXT_COLOR = '#000000'
 const CANONICAL_DOCUMENT_ID = /^epub-[0-9a-f]{16}$/
-
-/**
- * 标题层级 → 字号映射（基准 16px，接近常见 EPUB 阅读器的排版比例）
- */
-const HEADING_FONT_SIZES: Record<number, number> = {
-  1: 28,
-  2: 24,
-  3: 20,
-  4: 18,
-  5: 16,
-  6: 16
-}
-
-/** 脚注/辅助文本（sup/sub/small/aside[footnote]/epub:type=noteref）的字号 */
-const FOOTNOTE_FONT_SIZE = 12
-
-/** 行高统一取字号的 1.5 倍，与正文 16px→24px 保持一致 */
-const lineHeightForFontSize = (fontSize: number): number => fontSize * 1.5
-
-/**
- * 带语义样式的文本行 —— htmlToStyledTextLines 的输出，
- * 承载从 HTML 标签（h1-h6、sup、aside、b/i 等）推断出的排版信息。
- */
-type StyledTextLine = {
-  content: string
-  fontSize: number
-  lineHeight: number
-  fontWeight: number
-  italic: boolean
-}
-
-/** 行内样式标记已内联为字符串集合（'h1'..'h6' | 'fn' | 'b' | 'i'），无需独立类型 */
-
-// 哨兵字符：EPUB 章节正文中不会出现私用区码点，用作标签边界的占位符
-const SENTINEL_OPEN = '\uE000'
-const SENTINEL_CLOSE = '\uE001'
-
-/** 用哨兵包裹标签名的正则替换，保留语义供后续分段解析 */
-const markTag = (html: string, tagPattern: RegExp, name: string): string =>
-  html.replace(tagPattern, `${SENTINEL_OPEN}${name}${SENTINEL_CLOSE}`)
 
 const isBlobLike = (input: unknown): input is Blob => {
   return typeof Blob !== 'undefined' && input instanceof Blob
@@ -314,7 +279,7 @@ const renderImageParagraphs = async (images: IntermediateImage[]): Promise<strin
       const src = await resolveEmbeddedImageSource(image.src)
 
       return src
-        ? `<p><img src="${escapeHtml(src)}" alt="${escapeHtml(image.id)}" /></p>`
+        ? `<p style="text-align: center;"><img src="${escapeHtml(src)}" alt="${escapeHtml(image.id)}" style="display: block; width: auto; min-width: 70%; margin: 0 auto; max-width: 100%; height: auto; object-fit: contain;" /></p>`
         : ''
     })
   )
@@ -451,221 +416,12 @@ const extractEpubMetadata = (metadata: EpubMetadataSource): EpubDocumentMetadata
   return { title, identifier, author, language, publisher, date }
 }
 
-/**
- * 解码单个 HTML 实体（如 `&amp;`、`&#169;`、`&#x00A9;`）。
- * 这是一个轻量级的辅助函数，仅处理 EPUB 章节内容中常见的实体子集，
- * 并非完整的 HTML 实体解码器。未知实体保留原始 `&entity;` 形式。
- */
-const decodeHtmlEntity = (entity: string): string => {
-  const namedEntities: Record<string, string> = {
-    amp: '&',
-    apos: "'",
-    gt: '>',
-    lt: '<',
-    nbsp: ' ',
-    quot: '"'
-  }
-
-  if (entity.startsWith('#x') || entity.startsWith('#X')) {
-    const codePoint = Number.parseInt(entity.slice(2), 16)
-    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : `&${entity};`
-  }
-
-  if (entity.startsWith('#')) {
-    const codePoint = Number.parseInt(entity.slice(1), 10)
-    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : `&${entity};`
-  }
-
-  return namedEntities[entity] ?? `&${entity};`
-}
-
-/**
- * 从 EPUB 章节 HTML 中提取带语义样式的文本行。
- *
- * **注意：这不是一个完整的 HTML 解析器。** 它在原有正则文本提取的基础上，
- * 先用私用区哨兵字符（\uE000/\uE001）为语义标签打标记，再按行解释这些标记，
- * 从而在不引入 DOM 的前提下保留标题层级、脚注、粗体、斜体等排版信息。
- *
- * 处理流程：
- * 1. 移除 <script> 和 <style> 标签及其内容
- * 2. 为 h1-h6、sup/sub/small、aside[footnote]、epub:type=noteref、b/strong、i/em 打哨兵标记
- * 3. 将块级标签（p、div、h1-h6 等）和 <br> 转换为换行符
- * 4. 剥离剩余 HTML 标签并解码 HTML 实体
- * 5. 按行切分，解释每行内的哨兵标记，合成该行的样式（取"最强"语义：标题 > 脚注 > 粗斜体）
- * 6. 清理空白，过滤空行
- */
-const htmlToStyledTextLines = (html: string): StyledTextLine[] => {
-  // 第一步：剥离 script/style，随后给语义标签打哨兵标记（标记格式：\uE000名称\uE001）
-  let marked = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
-
-  // 标题 h1-h6：开标签标记为 h1..h6，闭标签标记为 /h1../h6（带斜杠前缀表示关闭）。
-  // 标题本身是块级元素，开闭标签都附带换行，
-  // 这样原本靠 </h1> 等块级闭合产生的行边界在哨兵替换后仍然保留。
-  marked = marked.replace(
-    /<h([1-6])\b[^>]*>/gi,
-    (_match, level) => `\n${SENTINEL_OPEN}h${level}${SENTINEL_CLOSE}\n`
-  )
-  marked = marked.replace(
-    /<\/h([1-6])\s*>/gi,
-    (_match, level) => `\n${SENTINEL_OPEN}/h${level}${SENTINEL_CLOSE}\n`
-  )
-  // 脚注类（行级）：aside[footnote] 整块、small 文本按小字号处理。
-  // aside 是块级元素，与标题一样在哨兵两侧附带换行以保留行边界。
-  // sup/sub/noteref 属于行内上标引用，行级样式保持正文（由渲染层自行处理上标），
-  // 因此不参与行级标记。
-  marked = marked.replace(/<aside\b[^>]*>/gi, `\n${SENTINEL_OPEN}fn${SENTINEL_CLOSE}\n`)
-  marked = marked.replace(/<\/aside\s*>/gi, `\n${SENTINEL_OPEN}/fn${SENTINEL_CLOSE}\n`)
-  // small/b/i 是行内元素：开闭哨兵不附带换行，通常与内容同行
-  marked = markTag(marked, /<(small)\b[^>]*>/gi, 'fn')
-  marked = markTag(marked, /<\/(small)\s*>/gi, '/fn')
-  marked = markTag(marked, /<(?:b|strong)\b[^>]*>/gi, 'b')
-  marked = markTag(marked, /<\/(?:b|strong)\s*>/gi, '/b')
-  marked = markTag(marked, /<(?:i|em)\b[^>]*>/gi, 'i')
-  marked = markTag(marked, /<\/(?:i|em)\s*>/gi, '/i')
-
-  // 第二步：块级边界转换为换行（哨兵标记不受影响，会随行保留）
-  const withBreaks = marked
-    .replace(/<br\s*\/?\s*>/gi, '\n')
-    .replace(/<\/(p|div|section|article|header|footer|li|tr|table)>/gi, '\n')
-    .replace(/<li\b[^>]*>/gi, '\n')
-    // 标题标签已在打标记阶段被哨兵替换，这里无需再处理
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&([a-zA-Z][a-zA-Z0-9]+|#[0-9]+|#x[0-9a-fA-F]+);/g, (_match, entity) =>
-      decodeHtmlEntity(entity)
-    )
-
-  // 第三步：逐行解释哨兵标记，合成样式。
-  // 样式来源 = 进入本行时的跨行激活状态 ∪ 本行内的开哨兵：
-  // - 块级元素（h1-h6、aside）的开/闭哨兵通常独占一行，靠跨行状态把样式传给内容行；
-  // - 行内元素（small/b/i）的开闭哨兵与内容同行，必须记入行级标记，
-  //   否则同一行内先开後闭会把状态清零、丢失粗斜体。
-  const sentinelPattern = new RegExp(`${SENTINEL_OPEN}([^\uE001]*)${SENTINEL_CLOSE}`, 'g')
-
-  let activeHeading = 0
-  let activeFootnote = false
-  let activeBold = false
-  let activeItalic = false
-
-  return withBreaks
-    .split(/\r?\n/)
-    .map((rawLine) => {
-      // 进入本行时的激活状态即为本行基础样式
-      const lineMarks = new Set<string>()
-      if (activeHeading) lineMarks.add(`h${activeHeading}`)
-      if (activeFootnote) lineMarks.add('fn')
-      if (activeBold) lineMarks.add('b')
-      if (activeItalic) lineMarks.add('i')
-
-      for (const match of rawLine.matchAll(sentinelPattern)) {
-        const name = match[1]
-        const isClose = name.startsWith('/')
-        const base = isClose ? name.slice(1) : name
-        const headingMatch = /^h([1-6])$/.exec(base)
-        if (headingMatch) {
-          activeHeading = isClose ? 0 : Number(headingMatch[1])
-          if (!isClose) lineMarks.add(base)
-        } else if (base === 'fn') {
-          activeFootnote = !isClose
-          if (!isClose) lineMarks.add('fn')
-        } else if (base === 'b') {
-          activeBold = !isClose
-          if (!isClose) lineMarks.add('b')
-        } else if (base === 'i') {
-          activeItalic = !isClose
-          if (!isClose) lineMarks.add('i')
-        }
-      }
-      const content = rawLine
-        .replace(sentinelPattern, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-      if (!content) return undefined
-
-      const headingLevel = [1, 2, 3, 4, 5, 6].find((level) => lineMarks.has(`h${level}`))
-      const isFootnote = lineMarks.has('fn')
-      const isBold = lineMarks.has('b')
-      const isItalic = lineMarks.has('i')
-
-      // 样式合成：标题 > 脚注 > 正文；粗斜体可叠加在任意级别上
-      const fontSize = headingLevel
-        ? HEADING_FONT_SIZES[headingLevel]
-        : isFootnote
-          ? FOOTNOTE_FONT_SIZE
-          : FONT_SIZE
-      return {
-        content,
-        fontSize,
-        lineHeight: lineHeightForFontSize(fontSize),
-        fontWeight: headingLevel || isBold ? 700 : 400,
-        italic: isItalic
-      }
-    })
-    .filter((line): line is StyledTextLine => line !== undefined)
-}
-
 const textPolygon = (x: number, y: number, width: number, height: number): QuadPolygon => [
   [x, y],
   [x + width, y],
   [x + width, y + height],
   [x, y + height]
 ]
-
-const makeText = (id: string, line: StyledTextLine, x: number, y: number): IntermediateText => {
-  // 宽度估算按字号等比缩放：8px/字符 是基准字号 16px 时的经验值
-  const width = Math.min(
-    PAGE_WIDTH - PAGE_MARGIN_X * 2,
-    Math.max(80, line.content.length * 8 * (line.fontSize / FONT_SIZE))
-  )
-
-  return new IntermediateText({
-    id,
-    content: line.content,
-    fontSize: line.fontSize,
-    fontFamily: FONT_FAMILY,
-    fontWeight: line.fontWeight,
-    italic: line.italic,
-    color: TEXT_COLOR,
-    polygon: textPolygon(x, y, width, line.lineHeight),
-    lineHeight: line.lineHeight,
-    ascent: line.fontSize * 0.8,
-    descent: line.fontSize * 0.2,
-    dir: TextDir.LTR,
-    opacity: 1,
-    skew: 0,
-    isEOL: true
-  })
-}
-
-/**
- * 章节 HTML → 文本内容列表。y 坐标按各行实际 lineHeight 累计，
- * 因此标题（更高行高）之后的内容会自然下移，不再按固定 24px 等距排布。
- */
-const htmlToTexts = (html: string, pageId: string): IntermediateText[] => {
-  const lines = htmlToStyledTextLines(html)
-  const texts: IntermediateText[] = []
-  let y = PAGE_MARGIN_Y
-
-  lines.forEach((line, index) => {
-    texts.push(makeText(`${pageId}-text-${index + 1}`, line, PAGE_MARGIN_X, y))
-    y += line.lineHeight
-  })
-
-  return texts
-}
-
-const getPageHeight = (contentCount: number, imageCount = 0, textBlockHeight?: number): number => {
-  // textBlockHeight 为各行 lineHeight 的实际总和；缺省时回退到旧的等距估算
-  const textHeight =
-    PAGE_MARGIN_Y * 2 + (textBlockHeight ?? Math.max(1, contentCount) * LINE_HEIGHT)
-  const imageHeight = imageCount * 220
-  return Math.max(1000, textHeight + imageHeight)
-}
-
-/** 文本块实际占用高度（各行 lineHeight 之和，供页面高度与图片起始位置使用） */
-const sumTextBlockHeight = (texts: IntermediateText[]): number =>
-  texts.reduce((sum, text) => sum + text.lineHeight, 0)
 
 const dataUrlFromAsset = (asset: EpubAssetReference): string | undefined => {
   if (!asset.data || !asset.mimeType) {
@@ -675,46 +431,149 @@ const dataUrlFromAsset = (asset: EpubAssetReference): string | undefined => {
   return `data:${asset.mimeType};base64,${bytesToBase64(asset.data)}`
 }
 
-const extractChapterImageIds = (html: string): string[] => {
-  const imageIds = new Set<string>()
-  const srcPattern = /<img\b[^>]*\bsrc\s*=\s*(["']?)([^"'\s>]+)\1/gi
+type ChapterImagePlacement = {
+  imageId: string
+  textIndex: number
+  width?: number
+  height?: number
+}
 
-  for (let match = srcPattern.exec(html); match !== null; match = srcPattern.exec(html)) {
-    const src = match[2]
+type ChapterImageContent = {
+  image: IntermediateImage
+  textIndex: number
+}
+
+type ChapterContentSource = {
+  html: string
+  imagePlacements: ChapterImagePlacement[]
+}
+
+const extractChapterContentSource = (html: string): ChapterContentSource => {
+  const placements: ChapterImagePlacement[] = []
+  const imagePattern = /<img\b(?:[^<>"']|"[^"]*"|'[^']*')*>/gi
+  const srcPattern = /(?:^|\s)src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i
+  const dimension = (tag: string, name: 'width' | 'height'): number | undefined => {
+    const attribute = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(tag)
+    const style = /(?:^|\s)style\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag)
+    const styleValue = new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([0-9.]+)px`, 'i').exec(style?.[1] ?? style?.[2] ?? '')?.[1]
+    const value = attribute?.[1] ?? attribute?.[2] ?? attribute?.[3] ?? styleValue
+    const parsed = value ? Number.parseFloat(value) : Number.NaN
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+  }
+  let htmlWithoutImages = ''
+  let precedingEnd = 0
+
+  for (let match = imagePattern.exec(html); match !== null; match = imagePattern.exec(html)) {
+    htmlWithoutImages += html.slice(precedingEnd, match.index)
+    const srcMatch = srcPattern.exec(match[0])
+    const src = srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? ''
     const rewrittenId = src.match(/\/images\/([^/]+)\//)?.[1]
 
     if (rewrittenId) {
-      imageIds.add(decodeURIComponent(rewrittenId))
+      placements.push({
+        imageId: rewrittenId,
+        textIndex: parseChapterText(htmlWithoutImages, 'placement').texts.length,
+        ...(dimension(match[0], 'width') ? { width: dimension(match[0], 'width') } : {}),
+        ...(dimension(match[0], 'height') ? { height: dimension(match[0], 'height') } : {})
+      })
+      htmlWithoutImages += '\n'
+    } else {
+      htmlWithoutImages += match[0]
     }
+    precedingEnd = imagePattern.lastIndex
   }
 
-  return [...imageIds]
+  return {
+    html: htmlWithoutImages + html.slice(precedingEnd),
+    imagePlacements: placements
+  }
 }
 
 const createPageImages = (
-  imageIds: string[],
+  placements: ChapterImagePlacement[],
   assetById: Map<string, EpubAssetReference>,
-  pageId: string,
-  startY: number
-): IntermediateImage[] => {
-  return imageIds.flatMap((imageId, index) => {
-    const asset = assetById.get(imageId)
+  pageId: string
+): ChapterImageContent[] => {
+  return placements.flatMap((placement, index) => {
+    const asset = assetById.get(placement.imageId)
     const src = asset ? dataUrlFromAsset(asset) : undefined
 
     if (!src) {
       return []
     }
 
-    const y = startY + index * 220
+    const intrinsic = readImageDimensions(asset?.data, asset?.mimeType ?? '')
+    const sourceWidth = placement.width ?? intrinsic?.width ?? 240
+    const sourceHeight = placement.height
+      ?? (placement.width && intrinsic ? placement.width * intrinsic.height / intrinsic.width : intrinsic?.height)
+      ?? 180
+    const scale = Math.min(
+      (PAGE_WIDTH - PAGE_MARGIN_X * 2) / sourceWidth,
+      Math.max(1, MIN_IMAGE_WIDTH / sourceWidth)
+    )
+    const width = sourceWidth * scale
+    const height = sourceHeight * scale
+    const x = (PAGE_WIDTH - width) / 2
+
     return [
-      new IntermediateImage({
-        id: `${pageId}-image-${index + 1}`,
-        src,
-        polygon: textPolygon(PAGE_MARGIN_X, y, 240, 180),
-        opacity: 1
-      })
+      {
+        image: new IntermediateImage({
+          id: `${pageId}-image-${index + 1}`,
+          src,
+          polygon: textPolygon(x, PAGE_MARGIN_Y, width, height),
+          opacity: 1
+        }),
+        textIndex: placement.textIndex
+      }
     ]
   })
+}
+
+const orderChapterContent = (
+  texts: IntermediateText[],
+  images: ChapterImageContent[]
+): IntermediateContent[] => {
+  const imagesByTextIndex = new Map<number, IntermediateImage[]>()
+
+  images.forEach(({ image, textIndex: placementTextIndex }) => {
+    const textIndex = Math.min(placementTextIndex, texts.length)
+    const imagesAtIndex = imagesByTextIndex.get(textIndex) ?? []
+    imagesAtIndex.push(image)
+    imagesByTextIndex.set(textIndex, imagesAtIndex)
+  })
+
+  const content: IntermediateContent[] = []
+  texts.forEach((text, index) => {
+    content.push(...(imagesByTextIndex.get(index) ?? []), text)
+  })
+  content.push(...(imagesByTextIndex.get(texts.length) ?? []))
+  return content
+}
+
+const layoutChapterContent = (
+  content: IntermediateContent[],
+  paragraphs: IntermediateParagraph[]
+): number => {
+  let y = PAGE_MARGIN_Y
+
+  content.forEach((item) => {
+    const x = item.polygon[0][0]
+    const width = item.polygon[1][0] - item.polygon[0][0]
+    const height = item instanceof IntermediateImage
+      ? item.polygon[2][1] - item.polygon[1][1]
+      : item.lineHeight
+    item.polygon = textPolygon(x, y, width, height)
+    if (item instanceof IntermediateText) {
+      const paragraph = paragraphs.find((candidate) => candidate.textIds.includes(item.id))
+      if (paragraph) {
+        paragraph.y = y
+        paragraph.height = height
+      }
+    }
+    y += height + (item instanceof IntermediateImage ? 40 : 0)
+  })
+
+  return Math.max(1000, y + PAGE_MARGIN_Y)
 }
 
 const isImageManifestItem = (item: EpubManifestItem): boolean => {
@@ -814,29 +673,55 @@ const findPageIdForTocItem = (
   pageIdByManifestId: Map<string, string>,
   manifest: Record<string, EpubManifestItem>
 ): string | undefined => {
-  if (pageIdByManifestId.has(tocItem.id)) {
-    return pageIdByManifestId.get(tocItem.id)
-  }
-
   const targetItem = findManifestItemByHref(manifest, tocItem.href)
   return targetItem ? pageIdByManifestId.get(targetItem.id) : undefined
 }
 
+type OutlineResolutionContext = {
+  readonly pageIdByManifestId: Map<string, string>
+  readonly manifest: Record<string, EpubManifestItem>
+  readonly textIdByPageIdAndSourceId: ReadonlyMap<string, ReadonlyMap<string, string>>
+}
+
+const getTocFragment = (href: string): string | undefined => {
+  const fragmentIndex = href.indexOf('#')
+  if (fragmentIndex < 0 || fragmentIndex === href.length - 1) return undefined
+  const fragment = href.slice(fragmentIndex + 1)
+  try {
+    return decodeURIComponent(fragment)
+  } catch (error) {
+    if (!(error instanceof URIError)) throw error
+    return fragment
+  }
+}
+
 const buildOutline = (
   toc: EpubTocElement[],
-  pageIdByManifestId: Map<string, string>,
-  manifest: Record<string, EpubManifestItem>
+  context: OutlineResolutionContext
 ): IntermediateOutline[] | undefined => {
   const outline = toc
     .filter((item) => item.title?.trim())
     .map((item, index) => {
-      const pageId = findPageIdForTocItem(item, pageIdByManifestId, manifest)
-      const dest: IntermediateOutlineDest = pageId
+      const pageId = findPageIdForTocItem(
+        item,
+        context.pageIdByManifestId,
+        context.manifest
+      )
+      const fragment = getTocFragment(item.href)
+      const textId = pageId && fragment
+        ? context.textIdByPageIdAndSourceId.get(pageId)?.get(fragment)
+        : undefined
+      const dest: IntermediateOutlineDest = textId
         ? {
+            targetType: IntermediateOutlineDestType.TEXT,
+            textId
+          }
+        : pageId
+          ? {
             targetType: IntermediateOutlineDestType.PAGE,
             pageId
           }
-        : {
+          : {
             targetType: IntermediateOutlineDestType.URL,
             url: item.href,
             unsafeUrl: item.href,
@@ -911,6 +796,7 @@ export class EpubParser extends DocumentParser {
     const imageAssets = await collectImageAssets(epub)
     const assetById = new Map(imageAssets.map((asset) => [asset.id, asset]))
     const pageIdByManifestId = new Map<string, string>()
+    const textIdByPageIdAndSourceId = new Map<string, ReadonlyMap<string, string>>()
 
     const contentFlow = epub.flow.filter((flowItem) => !isNavigationManifestItem(flowItem))
     const firstFlowItem = contentFlow[0]
@@ -919,7 +805,9 @@ export class EpubParser extends DocumentParser {
       : undefined
     const coverAsset = imageAssets.find((asset) => asset.kind === 'cover')
     const coverSrc = coverAsset ? dataUrlFromAsset(coverAsset) : undefined
-    const firstChapterImageIds = firstChapterHtml ? extractChapterImageIds(firstChapterHtml) : []
+    const firstChapterImageIds = firstChapterHtml
+      ? extractChapterContentSource(firstChapterHtml).imagePlacements.map(({ imageId }) => imageId)
+      : []
     const coverIsFirstSpinePage = coverSrc
       ? firstChapterImageIds.some((imageId) => {
           const chapterAsset = assetById.get(imageId)
@@ -962,17 +850,16 @@ export class EpubParser extends DocumentParser {
       const html = index === 0 && firstChapterHtml !== undefined
         ? firstChapterHtml
         : await readChapterHtml(epub, flowItem.id)
-      const texts = htmlToTexts(html, pageId)
-      const chapterImageIds = extractChapterImageIds(html)
-      // 文本块实际高度随各行行高变化（标题更高），图片与页面高度都以此为准
-      const textBlockHeight = Math.max(sumTextBlockHeight(texts), LINE_HEIGHT)
+      const chapterSource = extractChapterContentSource(html)
+      const { texts, paragraphs, textIdBySourceId } = parseChapterText(chapterSource.html, pageId)
+      textIdByPageIdAndSourceId.set(pageId, textIdBySourceId)
       const images = createPageImages(
-        chapterImageIds,
+        chapterSource.imagePlacements,
         assetById,
-        pageId,
-        PAGE_MARGIN_Y + textBlockHeight + LINE_HEIGHT
+        pageId
       )
-      const pageHeight = getPageHeight(texts.length, images.length, textBlockHeight)
+      const content = orderChapterContent(texts, images)
+      const pageHeight = layoutChapterContent(content, paragraphs)
 
       infoList.push({
         id: pageId,
@@ -984,14 +871,19 @@ export class EpubParser extends DocumentParser {
             number: pageNumber,
             width: PAGE_WIDTH,
             height: pageHeight,
-            content: [...texts, ...images],
+            content,
+            paragraphs,
             thumbnail: undefined,
             useFlowLayout: true
           })
       })
     }
 
-    const outline = buildOutline(epub.toc, pageIdByManifestId, epub.manifest)
+    const outline = buildOutline(epub.toc, {
+      pageIdByManifestId,
+      manifest: epub.manifest,
+      textIdByPageIdAndSourceId
+    })
 
     const intermediateDocument = new IntermediateDocument({
       id,

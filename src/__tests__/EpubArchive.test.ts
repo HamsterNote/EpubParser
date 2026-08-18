@@ -106,6 +106,89 @@ describe('EpubArchive cross-version navigation', () => {
     expect(chapter).toContain('src="https://example.test/image.png"')
   })
 
+  it('keeps chapter normalization when an optional stylesheet is missing', async () => {
+    // Given: 样式表列在 manifest 中但归档条目损坏，同时章节图片仍然有效。
+    const zip = new JSZip()
+    zip.file('mimetype', 'application/epub+zip')
+    zip.file(
+      'META-INF/container.xml',
+      '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    zip.file(
+      'EPUB/package.opf',
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Missing CSS</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="styles" href="missing.css" media-type="text/css"/><item id="photo" href="photo.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+    )
+    zip.file(
+      'EPUB/chapter.xhtml',
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="missing.css"/></head><body><img src="photo.png"/></body></html>'
+    )
+    zip.file('EPUB/photo.png', new Uint8Array([1, 2, 3]))
+    const archive = new EpubArchive(await zip.generateAsync({ type: 'uint8array' }))
+    await archive.parse()
+
+    // When: 请求经过资源规范化的章节 HTML。
+    const chapter = await archive.getChapter('chapter')
+
+    // Then: 缺失样式被跳过，归档图片仍重写为可解析的内部路径。
+    expect(chapter).toContain('src="/images/photo/EPUB/photo.png"')
+  })
+
+  it('inlines linked stylesheets at their original cascade position', async () => {
+    // Given: 外链样式位于后续内联样式之前，二者声明同一属性。
+    const zip = new JSZip()
+    zip.file('mimetype', 'application/epub+zip')
+    zip.file(
+      'META-INF/container.xml',
+      '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    zip.file(
+      'EPUB/package.opf',
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>CSS Cascade</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="styles" href="styles.css" media-type="text/css"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+    )
+    zip.file(
+      'EPUB/chapter.xhtml',
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="styles.css"/><style>p { text-indent: 0; }</style></head><body><p>Text</p></body></html>'
+    )
+    zip.file('EPUB/styles.css', 'p { text-indent: 32px; }')
+    const archive = new EpubArchive(await zip.generateAsync({ type: 'uint8array' }))
+    await archive.parse()
+
+    // When: 外链 CSS 被转换成解析器可读取的内联样式。
+    const chapter = await archive.getChapter('chapter')
+
+    // Then: 替换后的 style 仍位于作者原本的内联 style 之前。
+    expect(chapter.indexOf('text-indent: 32px')).toBeLessThan(chapter.indexOf('text-indent: 0'))
+  })
+
+  it('bounds repeated stylesheet embedding per chapter', async () => {
+    // Given: 一个小型章节重复引用同一个 CSS 资源 40 次。
+    const zip = new JSZip()
+    zip.file('mimetype', 'application/epub+zip')
+    zip.file(
+      'META-INF/container.xml',
+      '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    zip.file(
+      'EPUB/package.opf',
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>CSS Budget</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="styles" href="styles.css" media-type="text/css"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+    )
+    const links = '<link rel="stylesheet" href="styles.css"/>'.repeat(40)
+    zip.file(
+      'EPUB/chapter.xhtml',
+      `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head>${links}</head><body><p>Text</p></body></html>`
+    )
+    zip.file('EPUB/styles.css', 'p { text-indent: 32px; }')
+    const archive = new EpubArchive(await zip.generateAsync({ type: 'uint8array' }))
+    await archive.parse()
+
+    // When: 章节规范化尝试内联所有重复引用。
+    const chapter = await archive.getChapter('chapter')
+
+    // Then: 只有预算内的 32 项被内联，其余引用保留而不会复制无界 CSS。
+    expect(chapter.match(/<style>/g)).toHaveLength(32)
+    expect(chapter.match(/<link\b/g)).toHaveLength(8)
+  })
+
   it('rejects an entry whose declared expanded size exceeds the safety limit', async () => {
     // Given: a ZIP central-directory entry claiming an unsafe expanded size.
     const zip = new JSZip()

@@ -8,6 +8,9 @@ const reEncodeResult = document.querySelector('#reEncodeResult')
 const downloadDecoded = document.querySelector('#downloadDecoded')
 const pageNumberInput = document.querySelector('#pageNumberInput')
 const showPageButton = document.querySelector('#showPageButton')
+const showRawSourceButton = document.querySelector('#showRawSourceButton')
+const previewPanel = document.querySelector('#previewPanel')
+const epubPreview = document.querySelector('#epubPreview')
 
 let selectedFile
 let decodedObjectUrl
@@ -66,11 +69,29 @@ const base64ToBlob = (base64, mimeType) => {
   return new Blob([bytes], { type: mimeType })
 }
 
+const resetResults = () => {
+  previewPanel.classList.add('hidden')
+  epubPreview.replaceChildren()
+
+  for (const resultNode of [encodeResult, decodeResult, reEncodeResult]) {
+    resultNode.classList.add('empty')
+    resultNode.textContent = '尚未运行。'
+  }
+
+  downloadDecoded.classList.add('hidden')
+  downloadDecoded.removeAttribute('href')
+  if (decodedObjectUrl) URL.revokeObjectURL(decodedObjectUrl)
+  decodedObjectUrl = undefined
+}
+
 const renderResults = (result) => {
   encodeResult.classList.remove('empty')
   decodeResult.classList.remove('empty')
   reEncodeResult.classList.remove('empty')
+  previewPanel.classList.remove('hidden')
 
+  // previewHtml 由 Demo 服务端从 IntermediateDocument 安全生成。
+  epubPreview.innerHTML = result.previewHtml
   encodeResult.innerHTML = renderDocumentSummary(result.encode)
   decodeResult.innerHTML = `
     <dl class="metric-list">
@@ -90,6 +111,7 @@ const renderResults = (result) => {
 }
 
 const runRoundtrip = async (input) => {
+  resetResults()
   runSampleButton.disabled = true
   runUploadButton.disabled = true
   setStatus('正在运行 encode -> decode -> re-encode，请稍候…')
@@ -121,6 +143,7 @@ const runRoundtrip = async (input) => {
 
 fileInput.addEventListener('change', () => {
   selectedFile = fileInput.files?.[0]
+  resetResults()
   runUploadButton.disabled = !selectedFile
   setStatus(selectedFile ? `已选择：${selectedFile.name}` : '等待运行 Demo。')
 })
@@ -166,7 +189,7 @@ const showPageData = async () => {
       payload
     )
     setStatus(
-      `已输出第 ${pageNumber} 页数据到 Console（全文共 ${payload.document.pageCount} 页），请打开开发者工具查看。`
+      `已输出第 ${pageNumber} 页数据到控制台（全文共 ${payload.document.pageCount} 页），请打开开发者工具查看。`
     )
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true)
@@ -175,4 +198,35 @@ const showPageData = async () => {
   }
 }
 
+const showRawSource = async () => {
+  if (!selectedFile) {
+    setStatus('请先选择一个 EPUB 文件，再输出原样内容。', true)
+    return
+  }
+
+  showRawSourceButton.disabled = true
+  setStatus('正在解析并输出原样 EPUB 源内容到控制台…')
+
+  try {
+    const response = await fetch('/api/raw-source', {
+      method: 'POST',
+      headers: { 'content-type': 'application/epub+zip' },
+      body: await selectedFile.arrayBuffer()
+    })
+    const payload = await response.json()
+
+    if (!response.ok) {
+      throw new Error(payload.error || 'Raw source query failed')
+    }
+
+    console.log('[EpubParser Demo] EPUB 解析器原样内容：', payload)
+    setStatus('已输出 EPUB 解析器原样内容到控制台，请打开开发者工具查看。')
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    showRawSourceButton.disabled = false
+  }
+}
+
 showPageButton.addEventListener('click', showPageData)
+showRawSourceButton.addEventListener('click', showRawSource)
