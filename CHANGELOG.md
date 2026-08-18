@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-beta.3] - 2026-08-18
+
+### 已变更
+- 重构 EPUB 图片定位与预览渲染，使行内图片能够与内容流保持对齐。
+
+### 已修复
+- 修复多个图片出现在同一 EPUB 内容流中时的行内图片顺序保持问题。
+- 在行内图片渲染修复后更新演示预览与 QA 证据。
+
 ## [0.5.1-beta.2] - 2026-08-16
 
 ### Fixed
