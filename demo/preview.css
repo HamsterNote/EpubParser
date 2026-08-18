@@ -131,6 +131,7 @@
   justify-content: center;
   margin: 28px auto;
   min-height: 72px;
+  min-width: 70%;
   padding: 16px;
   text-align: center;
   width: min(100%, calc(var(--epub-image-width, 100%) + 34px));
@@ -149,7 +150,7 @@
   max-height: 560px;
   max-width: 100%;
   object-fit: contain;
-  width: min(100%, var(--epub-image-width, 100%));
+  width: 100%;
 }
 
 .epub-image figcaption {

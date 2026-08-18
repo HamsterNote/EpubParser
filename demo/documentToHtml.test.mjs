@@ -138,6 +138,19 @@ test('按照图片 polygon 保留预览尺寸和页面内位置', async () => {
   assert.match(html, /--epub-image-aspect-ratio:2/)
 })
 
+test('预览图片样式为过小插图提供 70% 最小宽度', async () => {
+  // Given：IntermediateDocument 中仍存在历史生成的 1×1 图片 polygon。
+  const css = await import('node:fs/promises').then(({ readFile }) =>
+    readFile(new URL('./preview.css', import.meta.url), 'utf8')
+  )
+
+  // When：检查 Demo 实际应用到 figure 与 img 的响应式样式。
+  // Then：容器承担唯一的 70% 最小宽度，图片填满容器，避免两层百分比相乘为 49%。
+  assert.match(css, /\.epub-image\s*\{[^}]*min-width:\s*70%/s)
+  assert.match(css, /\.epub-image img\s*\{[^}]*width:\s*100%/s)
+  assert.doesNotMatch(css, /\.epub-image img\s*\{[^}]*min-width:/s)
+})
+
 test('空文档生成明确的空状态', async () => {
   // Given：IntermediateDocument 没有页面。
   const document = { title: '', pages: Promise.resolve([]) }

@@ -147,6 +147,10 @@ h2 {
   justify-content: flex-end;
 }
 
+.actions .secondary {
+  min-width: 0;
+}
+
 .file-picker input {
   display: none;
 }
@@ -273,6 +277,12 @@ h2 {
 
   .actions {
     justify-content: flex-start;
+  }
+
+  .actions .secondary,
+  .actions .file-picker,
+  .actions .link-button {
+    width: 100%;
   }
 }
 

@@ -12,7 +12,21 @@ const PAGE_MARGIN_Y = 40
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN_X * 2
 const DEFAULT_FONT_SIZE = 16
 const DEFAULT_FONT_FAMILY = 'sans-serif'
+const NOTE_FONT_SIZE = 13
+const NOTE_COLOR = '#5f5b53'
 const BLOCK_SELECTOR = 'p,div,section,article,header,footer,li,aside,h1,h2,h3,h4,h5,h6'
+const COMPACT_TEXT_SELECTOR = 'aside,small'
+const NOTE_SELECTOR = [
+  '[role="note"]',
+  '[role="doc-footnote"]',
+  '[role="doc-endnote"]',
+  '[epub\\:type~="note"]',
+  '[epub\\:type~="footnote"]',
+  '[epub\\:type~="endnote"]',
+  '[class~="footnote" i]',
+  '[class~="endnote" i]',
+  '[class~="note" i]'
+].join(',')
 const TEXT_ALIGNMENTS = new Set<IntermediateTextAlign>([
   'start',
   'end',
@@ -35,8 +49,9 @@ type ResolvedTextStyle = {
   readonly fontFamily: string
   readonly fontWeight: number
   readonly italic: boolean
+  readonly color: string
   readonly textAlign?: IntermediateTextAlign
-  readonly textIndent: number
+  readonly textIndent?: number
 }
 export type ParsedChapterText = {
   readonly texts: IntermediateText[]
@@ -113,7 +128,7 @@ const resolveStyle = (element: Element, rules: readonly CssRule[]): ResolvedText
   let fontWeight = 400
   let italic = false
   let textAlign: IntermediateTextAlign | undefined
-  let textIndent = 0
+  let textIndent: number | undefined
 
   for (const current of ancestors) {
     const declarations = matchingDeclarations(current, rules)
@@ -128,7 +143,9 @@ const resolveStyle = (element: Element, rules: readonly CssRule[]): ResolvedText
     if (alignment && TEXT_ALIGNMENTS.has(alignment as IntermediateTextAlign)) {
       textAlign = alignment as IntermediateTextAlign
     }
-    textIndent = parseLength(declarations['text-indent'], fontSize, CONTENT_WIDTH) ?? textIndent
+    if (declarations['text-indent'] !== undefined) {
+      textIndent = parseLength(declarations['text-indent'], fontSize, CONTENT_WIDTH)
+    }
   }
 
   const heading = /^H([1-6])$/.exec(element.tagName)
@@ -137,7 +154,13 @@ const resolveStyle = (element: Element, rules: readonly CssRule[]): ResolvedText
     fontSize = headingSizes[Number(heading[1]) - 1] ?? fontSize
     fontWeight = 700
   }
-  if (element.closest('aside,small')) fontSize = 12
+  const isNote = element.closest(NOTE_SELECTOR) !== null
+  if (element.closest(COMPACT_TEXT_SELECTOR) || isNote) {
+    fontSize = Math.min(fontSize, NOTE_FONT_SIZE)
+  }
+  if (isNote) {
+    italic = true
+  }
   if (element.closest('b,strong') || element.querySelector('b,strong')) fontWeight = 700
   if (element.closest('i,em') || element.querySelector('i,em')) italic = true
   const alignAttribute = element.getAttribute('align')?.toLowerCase()
@@ -145,7 +168,27 @@ const resolveStyle = (element: Element, rules: readonly CssRule[]): ResolvedText
     textAlign = alignAttribute as IntermediateTextAlign
   }
 
-  return { fontSize, fontFamily, fontWeight, italic, textAlign, textIndent }
+  return {
+    fontSize,
+    fontFamily,
+    fontWeight,
+    italic,
+    color: isNote ? NOTE_COLOR : '#000000',
+    textAlign,
+    textIndent
+  }
+}
+
+const leadingWhitespaceIndent = (source: string, fontSize: number): number => {
+  const leadingWhitespace = /^[\t ]+/.exec(source)?.[0]
+  if (!leadingWhitespace) return 0
+
+  // EPUB 正文常用半角空格表达首行缩进；tab 按 4 个空格处理。
+  const columns = [...leadingWhitespace].reduce(
+    (total, character) => total + (character === '\t' ? 4 : 1),
+    0
+  )
+  return columns >= 4 ? columns * fontSize * 0.5 : 0
 }
 
 const rectangle = (x: number, y: number, width: number, height: number) => [
@@ -170,7 +213,9 @@ export const parseChapterText = (html: string, pageId: string): ParsedChapterTex
 
   for (const element of sources) {
     const style = resolveStyle(element, rules)
-    const lines = (element.textContent ?? '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean)
+    const sourceText = element.textContent ?? ''
+    const textIndent = style.textIndent ?? leadingWhitespaceIndent(sourceText, style.fontSize)
+    const lines = sourceText.split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean)
     const firstTextId = `${pageId}-text-${texts.length + 1}`
     for (const descendant of element.querySelectorAll('[id]')) {
       const sourceId = descendant.getAttribute('id')
@@ -190,7 +235,7 @@ export const parseChapterText = (html: string, pageId: string): ParsedChapterTex
       const sourceId = current.getAttribute('id')
       if (sourceId && !textIdBySourceId.has(sourceId)) textIdBySourceId.set(sourceId, firstTextId)
     }
-    for (const content of lines) {
+    for (const [lineIndex, content] of lines.entries()) {
       const id = `${pageId}-text-${texts.length + 1}`
       const lineHeight = style.fontSize * 1.5
       const width = Math.min(CONTENT_WIDTH, Math.max(80, content.length * 8 * style.fontSize / DEFAULT_FONT_SIZE))
@@ -198,7 +243,7 @@ export const parseChapterText = (html: string, pageId: string): ParsedChapterTex
         ? PAGE_WIDTH - PAGE_MARGIN_X - width
         : style.textAlign === 'center'
           ? (PAGE_WIDTH - width) / 2
-          : PAGE_MARGIN_X + Math.max(0, style.textIndent)
+          : PAGE_MARGIN_X + (lineIndex === 0 ? Math.max(0, textIndent) : 0)
       texts.push(new IntermediateText({
         id,
         content,
@@ -206,7 +251,7 @@ export const parseChapterText = (html: string, pageId: string): ParsedChapterTex
         fontFamily: style.fontFamily,
         fontWeight: style.fontWeight,
         italic: style.italic,
-        color: '#000000',
+        color: style.color,
         polygon: rectangle(x, y, width, lineHeight),
         lineHeight,
         ascent: style.fontSize * 0.8,

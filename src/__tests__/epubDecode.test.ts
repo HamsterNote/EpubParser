@@ -191,8 +191,9 @@ describe('EpubParser.decode', () => {
     // Then: 图片段落居中，图片本身不拉伸且不会超出内容宽度
     expect(chapter).toContain('<p style="text-align: center;">')
     expect(chapter).toContain(
-      'style="display: block; margin: 0 auto; max-width: 100%; height: auto;"'
+      'style="display: block; width: auto; min-width: 70%; margin: 0 auto; max-width: 100%; height: auto; object-fit: contain;"'
     )
+    expect(chapter).not.toContain('width: 70%; min-width: 70%')
   })
 
   it('infers a remote image type when the server returns a generic content type', async () => {

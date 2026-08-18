@@ -8,6 +8,7 @@ const reEncodeResult = document.querySelector('#reEncodeResult')
 const downloadDecoded = document.querySelector('#downloadDecoded')
 const pageNumberInput = document.querySelector('#pageNumberInput')
 const showPageButton = document.querySelector('#showPageButton')
+const showRawSourceButton = document.querySelector('#showRawSourceButton')
 const previewPanel = document.querySelector('#previewPanel')
 const epubPreview = document.querySelector('#epubPreview')
 
@@ -188,7 +189,7 @@ const showPageData = async () => {
       payload
     )
     setStatus(
-      `已输出第 ${pageNumber} 页数据到 Console（全文共 ${payload.document.pageCount} 页），请打开开发者工具查看。`
+      `已输出第 ${pageNumber} 页数据到控制台（全文共 ${payload.document.pageCount} 页），请打开开发者工具查看。`
     )
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true)
@@ -197,4 +198,35 @@ const showPageData = async () => {
   }
 }
 
+const showRawSource = async () => {
+  if (!selectedFile) {
+    setStatus('请先选择一个 EPUB 文件，再输出原样内容。', true)
+    return
+  }
+
+  showRawSourceButton.disabled = true
+  setStatus('正在解析并输出原样 EPUB 源内容到控制台…')
+
+  try {
+    const response = await fetch('/api/raw-source', {
+      method: 'POST',
+      headers: { 'content-type': 'application/epub+zip' },
+      body: await selectedFile.arrayBuffer()
+    })
+    const payload = await response.json()
+
+    if (!response.ok) {
+      throw new Error(payload.error || 'Raw source query failed')
+    }
+
+    console.log('[EpubParser Demo] EPUB 解析器原样内容：', payload)
+    setStatus('已输出 EPUB 解析器原样内容到控制台，请打开开发者工具查看。')
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    showRawSourceButton.disabled = false
+  }
+}
+
 showPageButton.addEventListener('click', showPageData)
+showRawSourceButton.addEventListener('click', showRawSource)

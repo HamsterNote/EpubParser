@@ -13,6 +13,7 @@ type PageText = {
   fontFamily: string
   fontWeight: number
   italic: boolean
+  color: string
   lineHeight: number
   polygon: number[][]
 }
@@ -61,12 +62,17 @@ const makeStyledLayoutEpub = async (): Promise<Uint8Array> => {
   )
   zip.file(
     'EPUB/package.opf',
-    '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">styled-layout</dc:identifier><dc:title>Styled Layout</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2024-01-15T00:00:00Z</meta></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="photo" href="photo.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>'
+    '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">styled-layout</dc:identifier><dc:title>Styled Layout</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2024-01-15T00:00:00Z</meta></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="styles-before" href="styles-before.css" media-type="text/css"/><item id="styles-after" href="styles-after.css" media-type="text/css"/><item id="photo" href="photo.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>'
   )
   zip.file(
     'EPUB/chapter.xhtml',
-    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title><style>.styled { font-size: 22px; font-family: "Literata", serif; font-weight: 600; } .right { text-align: right; } .indent { text-indent: 32px; }</style></head><body><p class="styled">Styled paragraph.</p><p class="right">Right aligned.</p><p class="indent">Indented paragraph.</p><img src="photo.png" width="1200" height="600" alt="wide photo"/></body></html>'
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Chapter</title><link rel="stylesheet" href="styles-before.css"/><style>.styled { font-size: 22px; font-family: "Literata", serif; font-weight: 600; color: #fff; background: #000; } .right { text-align: right; } .cascade { text-indent: 0; } .reverse { text-indent: 0; }</style><link rel="stylesheet" href="styles-after.css"/></head><body><p class="styled">Styled paragraph.</p><p class="right">Right aligned.</p><p class="indent">Indented paragraph.</p><p>    Space-indented first line.\nContinuation line.</p><p>   Three spaces stay plain.</p><p class="no-indent">    Explicit zero indent.</p><p class="cascade">External before inline.</p><p class="reverse">Inline before external.</p><p class="note">Chapter-end explanatory note.</p><p role="note">Role note.</p><p epub:type="note">EPUB semantic note.</p><aside>Neutral aside.</aside><img src="photo.png" width="1200" height="600" alt="wide photo"/></body></html>'
   )
+  zip.file(
+    'EPUB/styles-before.css',
+    '.indent, .cascade { text-indent: 32px; } .no-indent { text-indent: 0; }'
+  )
+  zip.file('EPUB/styles-after.css', '.reverse { text-indent: 32px; }')
   zip.file('EPUB/photo.png', await readFile(fixturePath('red.png')))
   return zip.generateAsync({ type: 'uint8array' })
 }
@@ -254,7 +260,9 @@ describe('EpubParser.encode', () => {
     // S1: aside 脚注 → 更小字号
     const footnote = findLine('Footnote body text')
     expect(footnote.fontSize).toBeLessThan(16)
-    expect(footnote.fontSize).toBe(12)
+    expect(footnote.fontSize).toBe(13)
+    expect(footnote.italic).toBe(true)
+    expect(footnote.color).toBe('#5f5b53')
 
     // S2: 混合行（含 sup/b/i 的正文）取最强语义——仍是正文段，
     // 但粗体或斜体标记应提升 fontWeight 或 italic 之一
@@ -299,7 +307,8 @@ describe('EpubParser.encode', () => {
     expect(findLine('Styled paragraph.')).toMatchObject({
       fontSize: 22,
       fontFamily: 'Literata',
-      fontWeight: 600
+      fontWeight: 600,
+      color: '#000000'
     })
     const rightText = findLine('Right aligned.')
     const rightParagraph = page.paragraphs.find((paragraph) =>
@@ -308,6 +317,36 @@ describe('EpubParser.encode', () => {
     expect(rightParagraph?.textAlign).toBe('right')
     expect(rightText.polygon[1][0]).toBe(760)
     expect(findLine('Indented paragraph.').polygon[0][0]).toBe(72)
+
+    // Then: 4 个半角空格映射为 2em 首行缩进，后续行仍从段落左边界开始
+    expect(findLine('Space-indented first line.').polygon[0][0]).toBe(72)
+    expect(findLine('Continuation line.').polygon[0][0]).toBe(40)
+    expect(findLine('Three spaces stay plain.').polygon[0][0]).toBe(40)
+    expect(findLine('Explicit zero indent.').polygon[0][0]).toBe(40)
+    expect(findLine('External before inline.').polygon[0][0]).toBe(40)
+    expect(findLine('Inline before external.').polygon[0][0]).toBe(72)
+
+    // Then: 常见 note class 的章末注释使用较小、斜体和弱化颜色，与正文明确区分
+    expect(findLine('Chapter-end explanatory note.')).toMatchObject({
+      fontSize: 13,
+      italic: true,
+      color: '#5f5b53'
+    })
+    expect(findLine('Role note.')).toMatchObject({
+      fontSize: 13,
+      italic: true,
+      color: '#5f5b53'
+    })
+    expect(findLine('EPUB semantic note.')).toMatchObject({
+      fontSize: 13,
+      italic: true,
+      color: '#5f5b53'
+    })
+    expect(findLine('Neutral aside.')).toMatchObject({
+      fontSize: 13,
+      italic: false,
+      color: '#000000'
+    })
 
     // Then: 图片保持 2:1 比例、缩小到 720px 可用宽度并水平居中
     const image = page.content.find((item) => 'src' in item)
@@ -318,5 +357,23 @@ describe('EpubParser.encode', () => {
       [40, expect.any(Number)]
     ])
     expect((image?.polygon[2][1] ?? 0) - (image?.polygon[1][1] ?? 0)).toBe(360)
+  })
+
+  it('upscales tiny images to 70 percent of the readable content width', async () => {
+    // Given: fixture 中图片 intrinsic size 仅为 1×1px
+    const doc = await encodeFixture('with-images.epub')
+
+    // When: 读取 encode 生成的 IntermediateImage polygon
+    const pages = await doc.pages
+    const image = pages[0].content.find((item) => 'src' in item)
+
+    // Then: 图片等比放大到 720px 内容区的 70%，且保持正方形比例并居中
+    expect(image?.polygon).toEqual([
+      [148, expect.any(Number)],
+      [652, expect.any(Number)],
+      [652, expect.any(Number)],
+      [148, expect.any(Number)]
+    ])
+    expect((image?.polygon[2][1] ?? 0) - (image?.polygon[1][1] ?? 0)).toBe(504)
   })
 })

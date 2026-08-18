@@ -80,6 +80,7 @@ const invalidIntermediateError = (message: string) =>
 const PAGE_WIDTH = 800
 const PAGE_MARGIN_X = 40
 const PAGE_MARGIN_Y = 40
+const MIN_IMAGE_WIDTH = (PAGE_WIDTH - PAGE_MARGIN_X * 2) * 7 / 10
 const FONT_SIZE = 16
 const LINE_HEIGHT = 24
 const FONT_FAMILY = 'sans-serif'
@@ -278,7 +279,7 @@ const renderImageParagraphs = async (images: IntermediateImage[]): Promise<strin
       const src = await resolveEmbeddedImageSource(image.src)
 
       return src
-        ? `<p style="text-align: center;"><img src="${escapeHtml(src)}" alt="${escapeHtml(image.id)}" style="display: block; margin: 0 auto; max-width: 100%; height: auto;" /></p>`
+        ? `<p style="text-align: center;"><img src="${escapeHtml(src)}" alt="${escapeHtml(image.id)}" style="display: block; width: auto; min-width: 70%; margin: 0 auto; max-width: 100%; height: auto; object-fit: contain;" /></p>`
         : ''
     })
   )
@@ -506,7 +507,10 @@ const createPageImages = (
     const sourceHeight = placement.height
       ?? (placement.width && intrinsic ? placement.width * intrinsic.height / intrinsic.width : intrinsic?.height)
       ?? 180
-    const scale = Math.min(1, (PAGE_WIDTH - PAGE_MARGIN_X * 2) / sourceWidth)
+    const scale = Math.min(
+      (PAGE_WIDTH - PAGE_MARGIN_X * 2) / sourceWidth,
+      Math.max(1, MIN_IMAGE_WIDTH / sourceWidth)
+    )
     const width = sourceWidth * scale
     const height = sourceHeight * scale
     const x = (PAGE_WIDTH - width) / 2
